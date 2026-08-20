@@ -79,6 +79,17 @@ Confirm it is live:
 curl -u 'user:app password' https://example.com/wp-json/elementor-mcp/v1/status
 ```
 
+On Windows, `curl` is an alias for `Invoke-WebRequest` and does not accept
+`-u`. Use the bundled diagnostic instead, which checks reachability, the REST
+API, plugin activation and credentials in order so a failure tells you which
+one broke:
+
+```powershell
+.\scripts\Test-Bridge.ps1 -SiteUrl https://example.com -Username admin -AppPassword 'abcd efgh ijkl mnop'
+```
+
+Or force real curl with `curl.exe` rather than the alias.
+
 ### 2. An application password
 
 In wp-admin go to **Users → Profile → Application Passwords**, add one named
