@@ -53,9 +53,18 @@ tested against 59 cases; the PHP side stays thin and delegates to Elementor.
 
 ### 1. The bridge plugin
 
-Copy `plugin/elementor-mcp-bridge/` into `wp-content/plugins/` on the target
-site and activate it, or zip that directory and upload it through
-**Plugins → Add New → Upload Plugin**.
+Build an installable zip and upload it through **Plugins → Add New → Upload
+Plugin** in wp-admin:
+
+```bash
+./scripts/package-plugin.sh
+# build/elementor-mcp-bridge-1.0.0.zip
+```
+
+The script refuses to build if any file fails `php -l`, so a broken plugin
+cannot be packaged.
+
+Or install it directly:
 
 ```bash
 rsync -a plugin/elementor-mcp-bridge/ user@host:/var/www/site/wp-content/plugins/elementor-mcp-bridge/
@@ -63,6 +72,12 @@ wp plugin activate elementor-mcp-bridge     # or activate in wp-admin
 ```
 
 Requires WordPress 5.9+, PHP 7.4+ and Elementor 3.x or 4.x.
+
+Confirm it is live:
+
+```bash
+curl -u 'user:app password' https://example.com/wp-json/elementor-mcp/v1/status
+```
 
 ### 2. An application password
 
@@ -208,13 +223,19 @@ sites are built on. `elementor_site_status` reports whether it is available.
 ## Development
 
 ```bash
-npm run build       # compile
-npm test            # 59 unit tests
-npm run typecheck   # source and tests
-node tests/smoke.mjs   # boot the server and exercise the MCP handshake
+npm run build            # compile
+npm test                 # 59 unit tests
+npm run typecheck        # source and tests
+npm run smoke            # boot the server and exercise the MCP handshake
+npm run docs             # regenerate docs/TOOLS.md from the running server
+php tests/plugin-load.php   # load the plugin and register all 32 routes
+./scripts/package-plugin.sh # build the installable zip
 ```
 
-PHP is linted with `php -l`; the plugin has no build step.
+`tests/plugin-load.php` loads the bridge against stubbed WordPress functions
+and asserts every route has a callable handler and permission callback. It is
+not a substitute for a real site, but it catches the activation fatals that a
+zip would otherwise hide until upload.
 
 ## Licence
 
