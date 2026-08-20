@@ -1,6 +1,6 @@
 {
   "name": "elementor-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for deep, safe control of Elementor and WordPress sites",
   "license": "MIT",
   "type": "module",
@@ -28,7 +28,8 @@
     "docs": "npm run build && node tests/gen-tool-docs.mjs > docs/TOOLS.md",
     "smoke": "npm run build && node tests/smoke.mjs",
     "package:plugin": "./scripts/package-plugin.sh",
-    "test:plugin": "php tests/plugin-load.php"
+    "test:plugin": "php tests/plugin-load.php",
+    "test:guard": "npm run build && node tests/capability-guard.mjs"
   },
   "keywords": [
     "mcp",

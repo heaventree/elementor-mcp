@@ -215,13 +215,44 @@ class EMCP_Documents {
 
 		$current = self::read_elements( $post_id );
 
-		return array(
+		$result = array(
 			'id'        => $post_id,
 			'hash'      => is_array( $current ) ? EMCP_Tree::hash( $current ) : null,
 			'nodeCount' => is_array( $current ) ? count( EMCP_Tree::collect_ids( $current ) ) : 0,
 			'editUrl'   => self::edit_url( $post_id ),
 			'permalink' => get_permalink( $post_id ),
 		);
+
+		// Flag anything saved that this site cannot render, so a caller finds out
+		// now rather than from a blank section on the front end.
+		if ( is_array( $current ) ) {
+			$unsupported = EMCP_Schema::unsupported_types( $current );
+
+			if ( $unsupported['elements'] || $unsupported['widgets'] ) {
+				$result['warnings'] = array_values(
+					array_filter(
+						array(
+							$unsupported['elements']
+								? sprintf(
+									/* translators: %s: comma-separated element types */
+									__( 'This document uses element types that are not registered on this site and will not render: %s. If "container" is listed, enable Elementor > Settings > Features > Container.', 'elementor-mcp-bridge' ),
+									implode( ', ', $unsupported['elements'] )
+								)
+								: '',
+							$unsupported['widgets']
+								? sprintf(
+									/* translators: %s: comma-separated widget types */
+									__( 'This document uses widgets that are not registered on this site and will not render: %s. The plugin providing them may be deactivated.', 'elementor-mcp-bridge' ),
+									implode( ', ', $unsupported['widgets'] )
+								)
+								: '',
+						)
+					)
+				);
+			}
+		}
+
+		return $result;
 	}
 
 	/**

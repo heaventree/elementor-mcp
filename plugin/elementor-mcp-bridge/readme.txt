@@ -4,7 +4,7 @@ Tags: elementor, mcp, ai, rest-api, page-builder
 Requires at least: 5.9
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -85,6 +85,18 @@ Routes still register, and `/status` reports what is missing rather than
 returning a confusing 404.
 
 == Changelog ==
+
+= 1.0.1 =
+* /status now reports structuralElements and containerAvailable, read from the
+  live element registry. Elementor gates the flexbox Container behind an
+  experiment that defaults to inactive on sites installed before 3.16, so an
+  up-to-date Elementor does not guarantee containers exist.
+* Writes now return warnings listing element and widget types the site cannot
+  render, so an unrenderable layout is reported at save time rather than
+  discovered as a blank section on the front end. Warnings never block a save:
+  a page may legitimately contain widgets from a deactivated addon.
+* Native MCP detection now checks all four of the module's dependencies and
+  reports fullyActive and proxyUsable separately.
 
 = 1.0.0 =
 * Initial release.

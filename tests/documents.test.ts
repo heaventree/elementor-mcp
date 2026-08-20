@@ -170,3 +170,29 @@ describe('editDocument', () => {
     expect(writes).toHaveLength(0);
   });
 });
+
+describe('write warnings', () => {
+  it('carries bridge warnings through to the caller', async () => {
+    const bridge = vi.fn(async (path: string, options: Record<string, unknown> = {}) => {
+      if (options.method === 'POST') {
+        return {
+          id: 7,
+          hash: 'h2',
+          nodeCount: 2,
+          warnings: ['This document uses element types that are not registered on this site: container.'],
+        };
+      }
+
+      return { id: 7, title: 'Page', hash: 'h1', nodeCount: 2, elements: page('One') };
+    });
+
+    const outcome = await editDocument(
+      { bridge } as unknown as WordPressClient,
+      7,
+      (elements) => ({ elements }),
+    );
+
+    expect(outcome.result.warnings).toHaveLength(1);
+    expect(outcome.result.warnings![0]).toMatch(/not registered on this site/);
+  });
+});

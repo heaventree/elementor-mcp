@@ -28,6 +28,8 @@ export interface WriteResult {
   nodeCount: number;
   editUrl?: string;
   permalink?: string;
+  /** Things the site saved but cannot render, reported by the bridge. */
+  warnings?: string[];
 }
 
 /** Read a document with its element tree. */

@@ -48,12 +48,28 @@ function buildQuery(query: Record<string, unknown> | undefined): string {
   return serialised ? `?${serialised}` : '';
 }
 
+/** What a site can actually do, read once from its /status route. */
+export interface SiteCapabilities {
+  elementorActive: boolean;
+  elementorVersion: string | null;
+  /** Structural element types registered here, e.g. section, column, container. */
+  structuralElements: string[];
+  /**
+   * Whether the flexbox Container element exists. Elementor gates it behind an
+   * experiment that defaults to inactive on any site installed before 3.16, so
+   * a current Elementor is not a guarantee that containers are available.
+   */
+  containerAvailable: boolean;
+  widgetCount: number;
+}
+
 /** A REST client bound to one site. */
 export class WordPressClient {
   readonly site: SiteProfile;
   private readonly timeoutMs: number;
   private readonly globalReadOnly: boolean;
   private readonly authHeader: string;
+  private capabilityCache: Promise<SiteCapabilities> | null = null;
 
   constructor(site: SiteProfile, timeoutMs: number, globalReadOnly: boolean) {
     this.site = site;
@@ -70,6 +86,35 @@ export class WordPressClient {
   /** Call core's REST API. */
   async core<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
     return this.request<T>(`${CORE_NAMESPACE}/${path.replace(/^\/+/, '')}`, options);
+  }
+
+  /**
+   * Read this site's capabilities, once per process.
+   *
+   * Cached because it gates element creation and would otherwise add a round
+   * trip to every layout call. A site's registered element types do not change
+   * within the lifetime of a session.
+   */
+  async capabilities(): Promise<SiteCapabilities> {
+    if (!this.capabilityCache) {
+      this.capabilityCache = this.bridge<Record<string, unknown>>('status')
+        .then((status) => ({
+          elementorActive: Boolean(status.elementorActive),
+          elementorVersion: (status.elementorVersion as string | null) ?? null,
+          structuralElements: Array.isArray(status.structuralElements)
+            ? (status.structuralElements as string[])
+            : [],
+          containerAvailable: Boolean(status.containerAvailable),
+          widgetCount: Number(status.widgetCount ?? 0),
+        }))
+        .catch((error: unknown) => {
+          // Never let a capability probe be the thing that fails a call.
+          this.capabilityCache = null;
+          throw error;
+        });
+    }
+
+    return this.capabilityCache;
   }
 
   /** Is this site writable? */

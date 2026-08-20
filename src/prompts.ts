@@ -63,9 +63,13 @@ export function registerPrompts(server: McpServer, _context: ToolContext): void 
               '- elementor_list_widgets to see what this site actually has; do not assume a widget exists.\n' +
               '- elementor_get_globals to pick up the site\'s colour and typography tokens.\n' +
               '- elementor_list_templates in case a suitable layout already exists worth reusing.\n\n' +
+              'Check containerAvailable in the status result before choosing a layout element: ' +
+              'Elementor gates the flexbox container behind an experiment that is off by default on ' +
+              'sites installed before 3.16, and writing an element the site has not registered saves ' +
+              'cleanly then renders nothing. Use container where available, section plus column where not.\n\n' +
               'Then elementor_create_page as a draft, and build it up with elementor_batch_edit. ' +
-              'Use container elements for layout. Bind colours and fonts to global tokens rather than ' +
-              'hard-coding hex values, so the page stays consistent if the palette changes. ' +
+              'Bind colours and fonts to global tokens rather than hard-coding hex values, so the page ' +
+              'stays consistent if the palette changes. ' +
               'Finally elementor_render_page to check the result, and only publish once it looks right.',
           },
         },

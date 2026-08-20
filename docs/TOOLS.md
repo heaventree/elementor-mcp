@@ -199,7 +199,7 @@ Insert a structural element — a flexbox container (the modern default), or a s
 | Argument | Type | Notes |
 | --- | --- | --- |
 | `postId` | integer | **required**. WordPress post ID of the Elementor page, post or template. |
-| `elType` | `container` \| `section` \| `column` | default `"container"`. container is the modern flexbox element; section/column are the legacy layout pair. |
+| `elType` | `container` \| `section` \| `column` | default `"container"`. container is the modern flexbox element; section/column are the legacy layout pair. Container is not available on every site — check containerAvailable in elementor_site_status before building a layout around it. |
 | `settings` | object | default `{}`. Elementor control values keyed by control name. Call elementor_get_widget_schema for the valid keys of a widget. Responsive variants use _tablet and _mobile suffixes, e.g. padding_tablet. |
 | `children` | object[] | Optional child element nodes to place inside it. |
 | `targetId` | string |  |

@@ -377,6 +377,87 @@ class EMCP_Schema {
 	}
 
 	/**
+	 * The element and widget type names actually registered on this site.
+	 *
+	 * This is ground truth for what can be built here. It matters most for
+	 * structural elements: Elementor's Container is gated behind an experiment
+	 * that defaults to inactive on any site installed before 3.16, so a site
+	 * running a current Elementor may still have no container element at all.
+	 *
+	 * @return array{elements:string[],widgets:string[]}
+	 */
+	public static function registered_types() {
+		if ( is_wp_error( EMCP_Guard::require_elementor() ) ) {
+			return array(
+				'elements' => array(),
+				'widgets'  => array(),
+			);
+		}
+
+		$elements = \Elementor\Plugin::$instance->elements_manager->get_element_types();
+		$widgets  = \Elementor\Plugin::$instance->widgets_manager->get_widget_types();
+
+		return array(
+			'elements' => array_map( 'strval', array_keys( (array) $elements ) ),
+			'widgets'  => array_map( 'strval', array_keys( (array) $widgets ) ),
+		);
+	}
+
+	/**
+	 * Find element and widget types used in a tree that this site cannot render.
+	 *
+	 * Reported as warnings rather than enforced as errors: a page may legitimately
+	 * contain widgets from an addon that is currently deactivated, and refusing to
+	 * save would then lock the page against every other edit.
+	 *
+	 * @param array $elements Element tree.
+	 * @return array{elements:string[],widgets:string[]}
+	 */
+	public static function unsupported_types( array $elements ) {
+		$known = self::registered_types();
+
+		if ( ! $known['elements'] && ! $known['widgets'] ) {
+			return array(
+				'elements' => array(),
+				'widgets'  => array(),
+			);
+		}
+
+		$missing_elements = array();
+		$missing_widgets  = array();
+
+		EMCP_Tree::walk(
+			$elements,
+			static function ( $node ) use ( $known, &$missing_elements, &$missing_widgets ) {
+				if ( empty( $node['elType'] ) ) {
+					return;
+				}
+
+				if ( 'widget' === $node['elType'] ) {
+					$type = isset( $node['widgetType'] ) ? (string) $node['widgetType'] : '';
+
+					if ( '' !== $type && ! in_array( $type, $known['widgets'], true ) ) {
+						$missing_widgets[ $type ] = true;
+					}
+
+					return;
+				}
+
+				$type = (string) $node['elType'];
+
+				if ( ! in_array( $type, $known['elements'], true ) ) {
+					$missing_elements[ $type ] = true;
+				}
+			}
+		);
+
+		return array(
+			'elements' => array_keys( $missing_elements ),
+			'widgets'  => array_keys( $missing_widgets ),
+		);
+	}
+
+	/**
 	 * Registered dynamic tags, so a caller can bind settings to live data.
 	 *
 	 * @return array|WP_Error

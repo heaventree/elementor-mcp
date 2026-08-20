@@ -25,7 +25,7 @@ import { registerWidgetTools } from './tools/widgets.js';
 import { registerPrompts } from './prompts.js';
 
 const SERVER_NAME = 'elementor-mcp';
-const SERVER_VERSION = '1.0.0';
+const SERVER_VERSION = '1.0.1';
 
 /** Build a configured server instance. */
 export function createServer(context: ToolContext): McpServer {
@@ -39,6 +39,10 @@ export function createServer(context: ToolContext): McpServer {
         '2. elementor_get_outline to get element ids — do not fetch whole element trees unless you need them.\n' +
         '3. elementor_get_widget_schema before setting unfamiliar widget settings; control names are not guessable.\n' +
         '4. elementor_batch_edit for multi-step changes, so the page cannot be left half-edited.\n\n' +
+        'Layout: check containerAvailable in elementor_site_status before building. Elementor gates the ' +
+        'flexbox container behind an experiment that is off by default on sites installed before 3.16, ' +
+        'so a current Elementor does not guarantee containers exist. Where it is false, build with ' +
+        'section and column instead.\n\n' +
         'Every write snapshots the page first; elementor_restore_snapshot undoes the last change. ' +
         'Writes carry the hash the page was read at and are rejected if it changed underneath you. ' +
         'Site-wide replace defaults to a dry run — read the report before committing.',

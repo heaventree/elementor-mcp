@@ -3,7 +3,7 @@
  * Plugin Name: Elementor MCP Bridge
  * Plugin URI:  https://github.com/heaventree/elementor-mcp
  * Description: Exposes deep, capability-checked Elementor control over the WordPress REST API so an MCP client can read and edit page structure, widget settings, global design tokens and templates.
- * Version:     1.0.0
+ * Version:     1.0.1
  * Author:      Heaventree
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'EMCP_VERSION', '1.0.0' );
+define( 'EMCP_VERSION', '1.0.1' );
 define( 'EMCP_PLUGIN_FILE', __FILE__ );
 define( 'EMCP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 

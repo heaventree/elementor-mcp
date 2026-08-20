@@ -142,13 +142,7 @@ class EMCP_REST_Site extends EMCP_REST_Base {
 				'canManageGlobals' => EMCP_Guard::can_manage_globals(),
 				'canUploadFiles'   => current_user_can( 'upload_files' ),
 			),
-			'nativeMcp'       => array(
-				// Elementor 4.3+ ships its own MCP module, gated behind the
-				// WordPress Abilities API. When present the bridge can proxy it.
-				'moduleClass' => class_exists( '\Elementor\Modules\Mcp\Module' ),
-				'abilitiesApi' => function_exists( 'wp_register_ability' ),
-				'proxyRoute'  => '/wp-json/elementor/v1/mcp-proxy',
-			),
+			'nativeMcp'       => $this->native_mcp_state(),
 		);
 
 		if ( $elementor_active ) {
@@ -159,10 +153,52 @@ class EMCP_REST_Site extends EMCP_REST_Base {
 			$widgets = \Elementor\Plugin::$instance->widgets_manager->get_widget_types();
 			$payload['widgetCount'] = is_array( $widgets ) ? count( $widgets ) : 0;
 
+			$types = EMCP_Schema::registered_types();
+
+			$payload['structuralElements'] = $types['elements'];
+
+			// Ground truth for layout: Elementor's Container is gated behind an
+			// experiment that defaults to inactive on sites installed before
+			// 3.16, so a current Elementor can still have no container element.
+			$payload['containerAvailable'] = in_array( 'container', $types['elements'], true );
 			$payload['containerExperiment'] = $this->experiment_state( 'container' );
+
+			if ( ! $payload['containerAvailable'] ) {
+				$payload['layoutNote'] = __( 'This site has no container element. Build layouts with section and column, or enable Elementor > Settings > Features > Container to use flexbox containers.', 'elementor-mcp-bridge' );
+			}
 		}
 
 		return $this->respond( $payload );
+	}
+
+	/**
+	 * Report whether Elementor's own MCP module can actually serve a call.
+	 *
+	 * The module's is_active() needs the MCP adapter, the Abilities API and the
+	 * shared registry all present. The proxy route registers regardless, so a
+	 * call can succeed even when abilities are not registered — report both
+	 * rather than collapsing them into one flag.
+	 *
+	 * @return array
+	 */
+	private function native_mcp_state() {
+		$module_class = class_exists( '\Elementor\Modules\Mcp\Module' );
+		$abilities    = function_exists( 'wp_register_ability' );
+		$adapter      = class_exists( '\WP\MCP\Core\McpAdapter' );
+		$registry     = class_exists( '\Elementor\MCP\Composer\Mcp\Registry' );
+
+		return array(
+			'moduleClass'    => $module_class,
+			'abilitiesApi'   => $abilities,
+			'mcpAdapter'     => $adapter,
+			'sharedRegistry' => $registry,
+			// Every dependency present: abilities are registered and proxyable.
+			'fullyActive'    => $module_class && $abilities && $adapter && $registry,
+			// The proxy route registers even when is_active() is false, so a
+			// call is worth attempting whenever the module class exists.
+			'proxyUsable'    => $module_class,
+			'proxyRoute'     => '/wp-json/elementor/v1/mcp-proxy',
+		);
 	}
 
 	/**

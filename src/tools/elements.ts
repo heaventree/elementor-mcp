@@ -26,7 +26,7 @@ import {
   updateSettings,
   wrap,
 } from '../elementor/tree.js';
-import { ElementNotFoundError } from '../util/errors.js';
+import { ElementNotFoundError, ElementorMcpError } from '../util/errors.js';
 import type { ElementNode, TreeOperation } from '../elementor/types.js';
 
 const settingsArg = z
@@ -38,6 +38,8 @@ const settingsArg = z
 
 /** Shape an edit outcome into a compact confirmation. */
 function summarise<T>(outcome: EditOutcome<T>, message: string): ReturnType<typeof ok> {
+  const warnings = outcome.result.warnings ?? [];
+
   return ok(
     {
       ...(outcome.extra && typeof outcome.extra === 'object' ? outcome.extra : {}),
@@ -47,8 +49,11 @@ function summarise<T>(outcome: EditOutcome<T>, message: string): ReturnType<type
       nodeCountAfter: outcome.after.nodeCount,
       editUrl: outcome.result.editUrl,
       permalink: outcome.result.permalink,
+      ...(warnings.length ? { warnings } : {}),
     },
-    message,
+    // The site telling us it cannot render what we just saved matters more than
+    // the confirmation, so lead with it.
+    warnings.length ? `${message}\n\nWARNING: ${warnings.join(' ')}` : message,
   );
 }
 
@@ -156,7 +161,11 @@ export const registerElementTools: ToolModule = (server, { clients }) => {
         elType: z
           .enum(['container', 'section', 'column'])
           .default('container')
-          .describe('container is the modern flexbox element; section/column are the legacy layout pair.'),
+          .describe(
+            'container is the modern flexbox element; section/column are the legacy layout pair. ' +
+              'Container is not available on every site — check containerAvailable in elementor_site_status ' +
+              'before building a layout around it.',
+          ),
         settings: settingsArg.default({}),
         children: z
           .array(z.record(z.string(), z.unknown()))
@@ -169,6 +178,32 @@ export const registerElementTools: ToolModule = (server, { clients }) => {
     },
     async (args) => {
       const client = clients.get(args.site);
+
+      // Elementor gates the flexbox Container behind an experiment that is off
+      // by default on sites installed before 3.16. Writing an unregistered
+      // element type saves cleanly and then renders nothing, so check first.
+      const capabilities = await client.capabilities();
+
+      if (
+        capabilities.structuralElements.length > 0 &&
+        !capabilities.structuralElements.includes(args.elType)
+      ) {
+        const available = capabilities.structuralElements.join(', ') || 'none';
+
+        throw new ElementorMcpError(
+          `This site has no "${args.elType}" element registered, so adding one would save but render nothing.`,
+          {
+            code: 'element_type_unavailable',
+            status: 400,
+            hint:
+              args.elType === 'container'
+                ? `Use elType "section" (with a "column" inside it) instead, or turn on ` +
+                  `Elementor > Settings > Features > Container on this site. Available here: ${available}.`
+                : `Available structural elements here: ${available}.`,
+          },
+        );
+      }
+
       let newId = '';
 
       const outcome = await editDocument(
