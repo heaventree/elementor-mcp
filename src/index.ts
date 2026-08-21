@@ -25,7 +25,7 @@ import { registerWidgetTools } from './tools/widgets.js';
 import { registerPrompts } from './prompts.js';
 
 const SERVER_NAME = 'elementor-mcp';
-const SERVER_VERSION = '1.0.1';
+const SERVER_VERSION = '1.2.0';
 
 /** Build a configured server instance. */
 export function createServer(context: ToolContext): McpServer {

@@ -4,7 +4,7 @@ Tags: elementor, mcp, ai, rest-api, page-builder
 Requires at least: 5.9
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.1
+Stable tag: 1.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -85,6 +85,63 @@ Routes still register, and `/status` reports what is missing rather than
 returning a confusing 404.
 
 == Changelog ==
+
+= 1.2.0 =
+* Added a full OAuth 2.0 authorization server (RFC 6749) with mandatory
+  PKCE (RFC 7636, S256 only). claude.ai's custom connector — on both web
+  and desktop — runs a real authorization-code flow against the connector's
+  own origin rather than accepting a static token, so /mcp alone was not
+  enough to connect: the redirect to /authorize was 404ing before a user
+  ever saw a consent screen.
+* New endpoints, reserved at the site root (not under /wp-json/, matching
+  where OAuth clients look by convention): GET/POST /authorize (login +
+  consent screen), POST /token (code exchange), plus RFC 8414 and RFC 9728
+  discovery documents at /.well-known/oauth-authorization-server and
+  /.well-known/oauth-protected-resource.
+* An issued access token is not a new kind of credential to secure: it is a
+  real WordPress application password, minted via
+  WP_Application_Passwords::create_new_application_password() the moment
+  consent is given, and returned as base64(username:password) — the exact
+  shape the existing bearer-token shim already validates. Every connection
+  is individually visible and revocable from Users > Profile > Application
+  Passwords, same as any other application password, with no parallel
+  token store introduced.
+* redirect_uri is checked against an explicit allow-list (default: the
+  exact callback URL observed from a real claude.ai connection attempt),
+  which is what makes it safe to leave client_id unvalidated — the request
+  that triggered this work carried no client_secret, only a PKCE
+  challenge, i.e. a public client, for which client_id is a label rather
+  than a trust boundary.
+* The /mcp route now advertises the protected-resource metadata URL via a
+  WWW-Authenticate header on 401, and /status reports the authorization
+  and token endpoint URLs, so both an OAuth-aware client and a human can
+  find this without guessing.
+* No refresh token grant. The underlying application password does not
+  expire, so none is needed; a client that attempts one gets an explicit
+  unsupported_grant_type rather than a silent failure.
+* Verified with a new 46-assertion end-to-end harness
+  (tests/oauth-flow.php) covering the full authorization-code + PKCE
+  round trip: discovery metadata, the logged-out-redirects-to-login case,
+  consent approval and denial, PKCE verification (both correct and
+  incorrect verifiers), authorization-code replay rejection, redirect_uri
+  mismatch rejection, the untrusted-redirect_uri case never producing an
+  open redirect, and the issued token authenticating through the existing
+  bearer-token shim with no new resource-server code required.
+
+= 1.1.0 =
+* Added a full MCP server directly on this plugin: POST /wp-json/elementor-mcp/v1/mcp speaks JSON-RPC 2.0
+  (stateless Streamable HTTP), so an MCP client — including a claude.ai custom connector — can point at
+  this site directly. No separate Node process to install or keep running.
+* Exposes 49 tools covering everything the standalone elementor-mcp server does: page and element CRUD,
+  atomic element-tree operations (insert/move/duplicate/reorder/wrap/batch), widget schema introspection,
+  global design tokens, templates, snapshots and revisions, and site-wide search/replace.
+* Element-tree mutation logic is ported from the TypeScript server with matching semantics, verified
+  against 236 parity assertions and a further 51 end-to-end JSON-RPC assertions covering the full
+  read-mutate-write-with-hash-guard cycle, permission gating, and the destructive-operation confirm gate.
+* Accepts a bearer token as an alternative to HTTP Basic auth, for MCP clients whose connector UI only
+  offers a single token field: base64(username:app_password), the same value already used for Basic.
+* The conflict check on document writes moved from the REST controller into EMCP_Documents::write()
+  itself, so REST and MCP callers share one implementation instead of two that could drift.
 
 = 1.0.1 =
 * /status now reports structuralElements and containerAvailable, read from the

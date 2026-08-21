@@ -221,7 +221,7 @@ class EMCP_REST_Tools extends EMCP_REST_Base {
 		$dry_run = (bool) $request->get_param( 'dryRun' );
 
 		if ( ! $dry_run ) {
-			$allowed = EMCP_Guard::check_destructive( $request );
+			$allowed = EMCP_Guard::check_destructive( (bool) $request->get_param( 'confirm' ) );
 
 			if ( is_wp_error( $allowed ) ) {
 				return $allowed;

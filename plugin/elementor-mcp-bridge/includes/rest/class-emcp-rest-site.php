@@ -143,6 +143,12 @@ class EMCP_REST_Site extends EMCP_REST_Base {
 				'canUploadFiles'   => current_user_can( 'upload_files' ),
 			),
 			'nativeMcp'       => $this->native_mcp_state(),
+			'oauth'           => array(
+				'issuer'               => EMCP_OAuth::issuer(),
+				'authorizationEndpoint' => EMCP_OAuth::issuer() . '/authorize',
+				'tokenEndpoint'         => EMCP_OAuth::issuer() . '/token',
+				'allowedRedirectUris'   => EMCP_OAuth::allowed_redirect_uris(),
+			),
 		);
 
 		if ( $elementor_active ) {

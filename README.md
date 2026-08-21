@@ -26,28 +26,47 @@ is on them. This project closes that gap.
 - **Multi-site.** One server can front many WordPress installs, each addressable
   by name, each independently markable read-only.
 
-## Architecture
+## Two ways to connect
 
-Two pieces, because neither works alone:
+The bridge plugin can be used two ways, and they are independent — pick
+whichever fits how you work:
+
+**1. WordPress serves MCP directly (recommended).** The plugin exposes a
+JSON-RPC 2.0 endpoint at `/wp-json/elementor-mcp/v1/mcp` — the same
+"Streamable HTTP" transport most remote MCP servers use, running statelessly
+(no session, no persistent connection, which is exactly how a PHP request
+already works). Point an MCP client — including a claude.ai custom
+connector — at that URL and authenticate with a WordPress application
+password. Nothing to install beyond the plugin itself, and it works from
+claude.ai on the web, desktop or mobile.
+
+```
+MCP client  ──HTTPS──▶  WordPress
+                         └── Elementor MCP Bridge (this repo)
+                              ├── /mcp        (JSON-RPC 2.0, 49 tools)
+                              ├── /documents   ┐
+                              ├── /kit         │ plain REST, same logic
+                              ├── /templates   │ the MCP endpoint calls
+                              └── ...          ┘
+```
+
+**2. A local Node server (`src/`), talking to the bridge's REST API.** Useful
+for development, for MCP clients that only support local stdio servers, or
+when you would rather the element-tree logic run outside the PHP process.
 
 ```
 MCP client  ──stdio──▶  elementor-mcp (Node)  ──REST──▶  WordPress
-                                                          ├── Elementor MCP Bridge (this repo)
-                                                          └── Elementor
+                                                          └── Elementor MCP Bridge
 ```
 
-**`plugin/elementor-mcp-bridge/`** — a WordPress plugin exposing an
-`elementor-mcp/v1` REST namespace. It reads and writes Elementor documents
-through Elementor's own `Document::save()` (the same path the editor uses, so
-sanitisation, revisions and CSS regeneration all happen correctly), and
-introspects the live widget registry for schemas.
-
-**`src/`** — the MCP server. It holds the element tree in its own process and
-does the structural work there, so a 400 KB page can be edited without that JSON
-ever entering the model's context.
-
-That split is deliberate. Tree surgery lives in TypeScript where it is unit
-tested against 60 cases; the PHP side stays thin and delegates to Elementor.
+Both paths end up calling the same Elementor APIs — `Document::save()` (the
+same path the editor itself uses, so sanitisation, revisions and CSS
+regeneration all happen correctly) and the live widget registry for schemas.
+The element-tree mutation logic (insert, move, duplicate, reorder, wrap,
+batch) is implemented twice, once in each language, and kept in parity
+deliberately: 236 PHP assertions and 41 TypeScript ones exercise the same
+cases side by side, so a change to one is expected to show up as a matching
+change in the other's test file.
 
 ## Install
 
@@ -58,7 +77,7 @@ Plugin** in wp-admin:
 
 ```bash
 ./scripts/package-plugin.sh
-# build/elementor-mcp-bridge-1.0.1.zip
+# build/elementor-mcp-bridge-1.2.0.zip
 ```
 
 The script refuses to build if any file fails `php -l`, so a broken plugin
@@ -136,7 +155,34 @@ Several sites — set `ELEMENTOR_MCP_SITES` to a JSON array:
 | `ELEMENTOR_MCP_READ_ONLY` | `true` refuses every write, across all sites |
 | `ELEMENTOR_MCP_TIMEOUT_MS` | Per-request timeout, default 30000 |
 
-### Connecting a client
+### Connecting a client to the WordPress MCP endpoint (recommended)
+
+The endpoint is `https://example.com/wp-json/elementor-mcp/v1/mcp`.
+
+**claude.ai (web or desktop):** **Settings → Connectors → Add custom
+connector**, paste the URL, and continue — no token to generate or paste
+anywhere. It runs an OAuth flow on its own: you're sent to your site to log
+in (if needed) and approve the connection, then straight back to claude.ai,
+connected. See [Authentication](#authentication) for what that mints behind
+the scenes.
+
+**Any other MCP client:** if it accepts a static token instead, use
+`base64(username:app_password)` as either HTTP Basic or a bearer token:
+
+```bash
+echo -n 'your-user:abcd efgh ijkl mnop qrst uvwx' | base64
+```
+
+To check the endpoint directly, either way works for a plain `curl` test:
+
+```bash
+curl -u 'your-user:abcd efgh ijkl mnop qrst uvwx' \
+  -X POST https://example.com/wp-json/elementor-mcp/v1/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+### Connecting a client to the local Node server
 
 Claude Code:
 
@@ -161,6 +207,77 @@ Or by editing an MCP client config directly:
   }
 }
 ```
+
+## Authentication
+
+Two ways in, and which one applies depends on the client, not on you:
+
+**Direct — HTTP Basic or bearer, with an application password.** Every
+route — REST and MCP alike — accepts a WordPress application password
+(**Users → Profile → Application Passwords**) sent as HTTP Basic:
+
+```
+Authorization: Basic base64(username:app_password)
+```
+
+That is native to WordPress; no code in this plugin handles it. The MCP
+endpoint additionally accepts the same value as a bearer token —
+
+```
+Authorization: Bearer base64(username:app_password)
+```
+
+— for MCP clients whose connector UI only exposes a single "token" field.
+Same credential, two header shapes; there is no separate "MCP token" to
+generate. This is what the `curl` examples in this README use, and it is
+enough for the local Node server, direct REST calls, and any MCP client that
+accepts a static token.
+
+**OAuth — for clients that require it.** claude.ai's custom connector, on
+both web and desktop, does not accept a static token: it runs a full
+authorization-code flow with PKCE (RFC 6749 + RFC 7636) against the
+connector's own origin, the same as any other OAuth-only remote MCP server.
+The plugin implements that flow — `GET/POST /authorize`, `POST /token`, plus
+the RFC 8414 and RFC 9728 discovery documents — entirely to satisfy this
+requirement; it does not add any capability beyond what the direct route
+already offers, and the local Node server never needs it.
+
+You do not generate anything for this path yourself. Add the custom
+connector in claude.ai with the URL `https://example.com/wp-json/elementor-mcp/v1/mcp`
+and it drives the flow on its own: a redirect to your site to log in (if not
+already) and approve access, then straight back to claude.ai, connected.
+What gets minted behind the scenes is, again, an ordinary application
+password — named `Claude MCP (OAuth, <timestamp>)` — so it shows up
+individually in **Users → Profile → Application Passwords** and can be
+revoked from there like any other, with nothing extra to track.
+
+The redirect target is checked against an allow-list
+(`emcp_oauth_allowed_redirect_uris`, defaulting to claude.ai's confirmed
+callback) before any code is issued, so this cannot be turned into an open
+redirect by a crafted link.
+
+### CGI/FastCGI
+
+If direct authentication fails with a 401 and the credentials are correct,
+the server is likely running under CGI/FastCGI, which strips the
+`Authorization` header before PHP sees it. Add this to `.htaccess` above the
+WordPress block:
+
+```apache
+RewriteCond %{HTTP:Authorization} ^(.*)
+RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
+```
+
+## One site, or many
+
+The WordPress-hosted MCP endpoint has exactly one site: the one it runs on.
+Its 49 tools take no `site` argument — there is nothing to disambiguate.
+
+The local Node server can front several WordPress installs from one process
+(see [Configure](#configure) above), which is why its tools all accept an
+optional `site` argument. If you only ever work on one site, this
+distinction will not come up; it matters once you are managing more than one
+install from a single MCP client.
 
 ## How to use it well
 
@@ -234,21 +351,47 @@ sites are built on. `elementor_site_status` reports whether it is available.
 ## Development
 
 ```bash
-npm run verify           # everything below except docs and packaging
-npm run build            # compile
-npm test                 # 60 unit tests
-npm run typecheck        # source and tests
-npm run smoke            # boot the server and exercise the MCP handshake
-npm run test:guard       # drive the server against a mock site
-npm run test:plugin      # load the plugin and register all 32 routes
-npm run docs             # regenerate docs/TOOLS.md from the running server
-./scripts/package-plugin.sh # build the installable zip
+npm run verify               # every check below, except docs and packaging
+npm run build                # compile the Node server
+npm test                     # 60 TypeScript unit tests
+npm run typecheck            # source and tests
+npm run smoke                # boot the Node server and exercise the MCP handshake
+npm run test:guard           # drive the Node server against a mock bridge
+npm run docs                 # regenerate docs/TOOLS.md from the running Node server
+php tests/plugin-load.php    # load the plugin, register all 33 REST routes
+php tests/tree-mutators.php  # 236 assertions: PHP tree mutators against the same
+                              # cases as tests/tree.test.ts
+php tests/mcp-endpoint.php   # 51 assertions: full JSON-RPC round trips against an
+                              # in-memory WordPress — initialize, tools/list, and
+                              # real element edits through the hash-guarded write path
+php tests/oauth-flow.php     # 46 assertions: the full authorization-code + PKCE
+                              # round trip, driven directly against EMCP_OAuth
+./scripts/package-plugin.sh  # build the installable zip
 ```
 
-`tests/plugin-load.php` loads the bridge against stubbed WordPress functions
-and asserts every route has a callable handler and permission callback. It is
-not a substitute for a real site, but it catches the activation fatals that a
-zip would otherwise hide until upload.
+Four PHP harnesses, in order of what they prove:
+
+- `tests/plugin-load.php` — the plugin loads and every route resolves to a
+  callable handler and permission callback. Catches activation fatals before
+  they reach a zip upload.
+- `tests/tree-mutators.php` — the PHP element-tree mutators (insert, move,
+  duplicate, reorder, wrap, batch) behave identically to the TypeScript
+  ones, case for case.
+- `tests/mcp-endpoint.php` — the JSON-RPC layer itself: protocol negotiation,
+  tool discovery, and real tool calls against an in-memory post store,
+  including permission denial, the destructive-operation confirm gate, and
+  the snapshot-then-restore undo path. It stubs WordPress rather than
+  Elementor, so it exercises the bridge's own fallback write path, not
+  `Document::save()` — that half still needs a real site.
+- `tests/oauth-flow.php` — discovery metadata; the not-logged-in-redirects-
+  to-login case; consent approve and deny; PKCE accepted with the correct
+  verifier and rejected with the wrong one; a used code rejected on replay;
+  a mismatched `redirect_uri` rejected; an untrusted `redirect_uri` refused
+  as a page rather than ever becoming a redirect; and the token this
+  endpoint issues successfully authenticating through the existing
+  bearer-token shim with no changes needed there. It calls `EMCP_OAuth`'s
+  private handlers directly via reflection, since the real request router
+  ends in `exit`.
 
 `tests/capability-guard.mjs` runs the built server over stdio against
 `tests/mock-bridge.mjs`, a stand-in bridge whose element registry, widget

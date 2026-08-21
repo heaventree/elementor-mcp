@@ -1,6 +1,6 @@
 {
   "name": "elementor-mcp",
-  "version": "1.0.1",
+  "version": "1.2.0",
   "description": "MCP server for deep, safe control of Elementor and WordPress sites",
   "license": "MIT",
   "type": "module",
@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "npm run typecheck && npm test && npm run build && node tests/smoke.mjs && node tests/capability-guard.mjs && php tests/plugin-load.php",
+    "verify": "npm run typecheck && npm test && npm run build && node tests/smoke.mjs && node tests/capability-guard.mjs && php tests/plugin-load.php && php tests/tree-mutators.php && php tests/mcp-endpoint.php && php tests/oauth-flow.php",
     "prepublishOnly": "npm run build",
     "docs": "npm run build && node tests/gen-tool-docs.mjs > docs/TOOLS.md",
     "smoke": "npm run build && node tests/smoke.mjs",
