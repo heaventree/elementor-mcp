@@ -4,7 +4,7 @@ Tags: elementor, mcp, ai, rest-api, page-builder
 Requires at least: 5.9
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.0.1
+Stable tag: 1.1.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -85,6 +85,21 @@ Routes still register, and `/status` reports what is missing rather than
 returning a confusing 404.
 
 == Changelog ==
+
+= 1.1.0 =
+* Added a full MCP server directly on this plugin: POST /wp-json/elementor-mcp/v1/mcp speaks JSON-RPC 2.0
+  (stateless Streamable HTTP), so an MCP client — including a claude.ai custom connector — can point at
+  this site directly. No separate Node process to install or keep running.
+* Exposes 49 tools covering everything the standalone elementor-mcp server does: page and element CRUD,
+  atomic element-tree operations (insert/move/duplicate/reorder/wrap/batch), widget schema introspection,
+  global design tokens, templates, snapshots and revisions, and site-wide search/replace.
+* Element-tree mutation logic is ported from the TypeScript server with matching semantics, verified
+  against 236 parity assertions and a further 51 end-to-end JSON-RPC assertions covering the full
+  read-mutate-write-with-hash-guard cycle, permission gating, and the destructive-operation confirm gate.
+* Accepts a bearer token as an alternative to HTTP Basic auth, for MCP clients whose connector UI only
+  offers a single token field: base64(username:app_password), the same value already used for Basic.
+* The conflict check on document writes moved from the REST controller into EMCP_Documents::write()
+  itself, so REST and MCP callers share one implementation instead of two that could drift.
 
 = 1.0.1 =
 * /status now reports structuralElements and containerAvailable, read from the

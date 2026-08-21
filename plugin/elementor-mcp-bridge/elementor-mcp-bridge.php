@@ -3,7 +3,7 @@
  * Plugin Name: Elementor MCP Bridge
  * Plugin URI:  https://github.com/heaventree/elementor-mcp
  * Description: Exposes deep, capability-checked Elementor control over the WordPress REST API so an MCP client can read and edit page structure, widget settings, global design tokens and templates.
- * Version:     1.0.1
+ * Version:     1.1.0
  * Author:      Heaventree
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'EMCP_VERSION', '1.0.1' );
+define( 'EMCP_VERSION', '1.1.0' );
 define( 'EMCP_PLUGIN_FILE', __FILE__ );
 define( 'EMCP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -26,6 +26,7 @@ define( 'EMCP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'EMCP_REST_NAMESPACE', 'elementor-mcp/v1' );
 
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-guard.php';
+require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-auth.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-tree.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-snapshots.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-documents.php';
@@ -33,12 +34,18 @@ require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-schema.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-globals.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-library.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-scanner.php';
+require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-compose.php';
 require_once EMCP_PLUGIN_DIR . 'includes/rest/class-emcp-rest-base.php';
 require_once EMCP_PLUGIN_DIR . 'includes/rest/class-emcp-rest-site.php';
 require_once EMCP_PLUGIN_DIR . 'includes/rest/class-emcp-rest-documents.php';
 require_once EMCP_PLUGIN_DIR . 'includes/rest/class-emcp-rest-globals.php';
 require_once EMCP_PLUGIN_DIR . 'includes/rest/class-emcp-rest-library.php';
 require_once EMCP_PLUGIN_DIR . 'includes/rest/class-emcp-rest-tools.php';
+require_once EMCP_PLUGIN_DIR . 'includes/mcp/class-emcp-mcp-schema.php';
+require_once EMCP_PLUGIN_DIR . 'includes/mcp/class-emcp-mcp-guard.php';
+require_once EMCP_PLUGIN_DIR . 'includes/mcp/class-emcp-mcp-tools.php';
+require_once EMCP_PLUGIN_DIR . 'includes/mcp/class-emcp-mcp-server.php';
+require_once EMCP_PLUGIN_DIR . 'includes/rest/class-emcp-rest-mcp.php';
 
 /**
  * Register every REST controller shipped by the bridge.
@@ -53,6 +60,7 @@ function emcp_register_rest_routes() {
 		new EMCP_REST_Globals(),
 		new EMCP_REST_Library(),
 		new EMCP_REST_Tools(),
+		new EMCP_REST_MCP(),
 	);
 
 	foreach ( $controllers as $controller ) {
@@ -60,6 +68,8 @@ function emcp_register_rest_routes() {
 	}
 }
 add_action( 'rest_api_init', 'emcp_register_rest_routes' );
+
+EMCP_Auth::register();
 
 /**
  * Warn on the plugins screen when Elementor is missing, since every route

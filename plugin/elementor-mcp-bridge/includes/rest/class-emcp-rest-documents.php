@@ -410,28 +410,6 @@ class EMCP_REST_Documents extends EMCP_REST_Base {
 		$settings = $request->get_param( 'settings' );
 		$expected = (string) $request->get_param( 'expectedHash' );
 
-		if ( '' !== $expected ) {
-			$current = EMCP_Documents::read_elements( $post_id );
-
-			if ( is_wp_error( $current ) ) {
-				return $current;
-			}
-
-			$actual = EMCP_Tree::hash( $current );
-
-			if ( $actual !== $expected ) {
-				return new WP_Error(
-					'emcp_conflict',
-					__( 'The document changed since you read it. Re-read it, re-apply your change, and retry.', 'elementor-mcp-bridge' ),
-					array(
-						'status'       => 409,
-						'expectedHash' => $expected,
-						'actualHash'   => $actual,
-					)
-				);
-			}
-		}
-
 		if ( null !== $elements && ! is_array( $elements ) ) {
 			return new WP_Error(
 				'emcp_bad_elements',
@@ -440,13 +418,17 @@ class EMCP_REST_Documents extends EMCP_REST_Base {
 			);
 		}
 
+		// The conflict check itself lives in EMCP_Documents::write() so every
+		// writer — this REST route and the MCP compose tools alike — shares one
+		// implementation instead of two copies that could drift.
 		return $this->respond(
 			EMCP_Documents::write(
 				$post_id,
 				$elements,
 				is_array( $settings ) ? $settings : null,
 				(bool) $request->get_param( 'snapshot' ),
-				(string) $request->get_param( 'snapshotLabel' )
+				(string) $request->get_param( 'snapshotLabel' ),
+				'' !== $expected ? $expected : null
 			)
 		);
 	}
@@ -470,7 +452,7 @@ class EMCP_REST_Documents extends EMCP_REST_Base {
 		}
 
 		if ( $force ) {
-			$allowed = EMCP_Guard::check_destructive( $request );
+			$allowed = EMCP_Guard::check_destructive( (bool) $request->get_param( 'confirm' ) );
 
 			if ( is_wp_error( $allowed ) ) {
 				return $allowed;

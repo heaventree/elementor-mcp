@@ -103,6 +103,39 @@ Change that with the `emcp_snapshot_limit` filter.
 | POST | `/media/sideload` | Pull a remote image into the media library |
 | POST | `/native-mcp/proxy` | Call an Elementor native MCP ability |
 
+## MCP endpoint
+
+`POST /mcp` speaks JSON-RPC 2.0 over a single request/response — the
+"stateless Streamable HTTP" shape of the MCP specification. No session, no
+SSE stream; every call is self-contained, which is what makes it a natural
+fit for PHP's one-process-per-request model.
+
+```bash
+curl -u 'user:app password' \
+  -X POST https://example.com/wp-json/elementor-mcp/v1/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"elementor_get_outline","arguments":{"postId":42}}}'
+```
+
+Supported methods: `initialize`, `ping`, `tools/list`, `tools/call`,
+`prompts/list`, `prompts/get`. `GET` and `DELETE` on the same route return a
+405 explaining the endpoint is stateless — there is no stream to resume or
+session to close.
+
+Batches (a JSON array of request objects) are supported; notifications (a
+request with no `id`) get no reply and are dropped from a batch response, per
+JSON-RPC 2.0.
+
+Authentication is the same application password as every other route,
+sent as HTTP Basic or, for clients that only offer one token field, as a
+bearer token whose value is the same `base64(username:app_password)`. See
+the README's Authentication section.
+
+The 49 tools exposed here mirror the standalone `elementor-mcp` Node
+server's tool surface, minus the `site` argument — this endpoint only ever
+addresses the site it runs on. `docs/TOOLS.md` documents each one; the
+descriptions and argument shapes are the same on both transports.
+
 ## Errors
 
 Errors follow the WordPress REST shape:

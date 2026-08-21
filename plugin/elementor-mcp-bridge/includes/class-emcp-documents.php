@@ -134,14 +134,17 @@ class EMCP_Documents {
 	/**
 	 * Write elements and/or settings back to a document.
 	 *
-	 * @param int        $post_id  Post ID.
-	 * @param array|null $elements Element tree, or null to leave untouched.
-	 * @param array|null $settings Page settings to merge, or null.
-	 * @param bool       $snapshot Whether to snapshot the prior state first.
-	 * @param string     $label    Snapshot label.
+	 * @param int         $post_id       Post ID.
+	 * @param array|null  $elements      Element tree, or null to leave untouched.
+	 * @param array|null  $settings      Page settings to merge, or null.
+	 * @param bool        $snapshot      Whether to snapshot the prior state first.
+	 * @param string      $label         Snapshot label.
+	 * @param string|null $expected_hash Hash the caller last read. If given and it no
+	 *                                   longer matches, the write is rejected with a 409
+	 *                                   rather than silently overwriting a concurrent change.
 	 * @return array|WP_Error Summary of the write.
 	 */
-	public static function write( $post_id, $elements = null, $settings = null, $snapshot = true, $label = '' ) {
+	public static function write( $post_id, $elements = null, $settings = null, $snapshot = true, $label = '', $expected_hash = null ) {
 		$post_id = (int) $post_id;
 
 		if ( ! EMCP_Guard::can_edit_post( $post_id ) ) {
@@ -150,6 +153,28 @@ class EMCP_Documents {
 				__( 'You do not have permission to edit this post.', 'elementor-mcp-bridge' ),
 				array( 'status' => 403 )
 			);
+		}
+
+		if ( ! empty( $expected_hash ) ) {
+			$current = self::read_elements( $post_id );
+
+			if ( is_wp_error( $current ) ) {
+				return $current;
+			}
+
+			$actual_hash = EMCP_Tree::hash( $current );
+
+			if ( $actual_hash !== $expected_hash ) {
+				return new WP_Error(
+					'emcp_conflict',
+					__( 'The document changed since you read it. Re-read it, re-apply your change, and retry.', 'elementor-mcp-bridge' ),
+					array(
+						'status'       => 409,
+						'expectedHash' => $expected_hash,
+						'actualHash'   => $actual_hash,
+					)
+				);
+			}
 		}
 
 		if ( is_array( $elements ) ) {

@@ -84,7 +84,7 @@ class EMCP_Guard {
 	 * @param WP_REST_Request $request Request.
 	 * @return true|WP_Error
 	 */
-	public static function check_destructive( $request ) {
+	public static function check_destructive( $confirm ) {
 		if ( ! self::destructive_enabled() ) {
 			return new WP_Error(
 				'emcp_destructive_disabled',
@@ -93,7 +93,7 @@ class EMCP_Guard {
 			);
 		}
 
-		if ( ! $request->get_param( 'confirm' ) ) {
+		if ( ! $confirm ) {
 			return new WP_Error(
 				'emcp_confirm_required',
 				__( 'This operation permanently changes content. Re-send the request with "confirm": true.', 'elementor-mcp-bridge' ),

@@ -75,6 +75,7 @@ function plugin_dir_path( $file ) {
 function add_action( $hook, $callback, $priority = 10, $args = 1 ) {
 	$GLOBALS['emcp_actions'][] = $hook;
 }
+function add_filter( $hook, $callback, $priority = 10, $args = 1 ) {}
 
 function register_activation_hook( $file, $callback ) {}
 function did_action( $hook ) { return 0; }
@@ -93,6 +94,7 @@ function wp_json_encode( $value ) { return json_encode( $value ); }
 function wp_strip_all_tags( $text ) { return strip_tags( (string) $text ); }
 function taxonomy_exists( $tax ) { return false; }
 function is_wp_error( $thing ) { return $thing instanceof WP_Error; }
+function __return_true() { return true; }
 
 function register_rest_route( $namespace, $route, $args ) {
 	$GLOBALS['emcp_routes'][] = array(
