@@ -56,7 +56,23 @@ class EMCP_REST_MCP extends EMCP_REST_Base {
 	 * @return true|WP_Error
 	 */
 	public function can_connect() {
-		return $this->can_read();
+		$allowed = $this->can_read();
+
+		if ( true !== $allowed ) {
+			// RFC 6750 §3 (Bearer) points a client at how to authenticate;
+			// resource_metadata is the MCP authorization spec's addition,
+			// pointing at RFC 9728 discovery so a compliant client can find
+			// this server's OAuth endpoints from a bare 401 rather than
+			// guessing /authorize and /token at the site root.
+			header(
+				sprintf(
+					'WWW-Authenticate: Bearer resource_metadata="%s"',
+					esc_url_raw( EMCP_OAuth::issuer() . '/.well-known/oauth-protected-resource' )
+				)
+			);
+		}
+
+		return $allowed;
 	}
 
 	/**

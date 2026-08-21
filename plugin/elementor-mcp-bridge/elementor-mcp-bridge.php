@@ -3,7 +3,7 @@
  * Plugin Name: Elementor MCP Bridge
  * Plugin URI:  https://github.com/heaventree/elementor-mcp
  * Description: Exposes deep, capability-checked Elementor control over the WordPress REST API so an MCP client can read and edit page structure, widget settings, global design tokens and templates.
- * Version:     1.1.0
+ * Version:     1.2.0
  * Author:      Heaventree
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'EMCP_VERSION', '1.1.0' );
+define( 'EMCP_VERSION', '1.2.0' );
 define( 'EMCP_PLUGIN_FILE', __FILE__ );
 define( 'EMCP_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
@@ -27,6 +27,7 @@ define( 'EMCP_REST_NAMESPACE', 'elementor-mcp/v1' );
 
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-guard.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-auth.php';
+require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-oauth.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-tree.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-snapshots.php';
 require_once EMCP_PLUGIN_DIR . 'includes/class-emcp-documents.php';
@@ -70,6 +71,7 @@ function emcp_register_rest_routes() {
 add_action( 'rest_api_init', 'emcp_register_rest_routes' );
 
 EMCP_Auth::register();
+EMCP_OAuth::register();
 
 /**
  * Warn on the plugins screen when Elementor is missing, since every route

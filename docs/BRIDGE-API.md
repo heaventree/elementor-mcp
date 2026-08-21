@@ -103,6 +103,74 @@ Change that with the `emcp_snapshot_limit` filter.
 | POST | `/media/sideload` | Pull a remote image into the media library |
 | POST | `/native-mcp/proxy` | Call an Elementor native MCP ability |
 
+## OAuth 2.0 authorization server
+
+`GET/POST /authorize` and `POST /token`, at the site root (not under
+`/wp-json/`) — that's where OAuth clients look by convention, and where a
+real claude.ai connector attempt was observed sending its authorization
+request. PKCE (RFC 7636) is mandatory; `code_challenge_method` must be
+`S256`. Discovery documents are published per RFC 8414 and RFC 9728 at
+`/.well-known/oauth-authorization-server` and
+`/.well-known/oauth-protected-resource`.
+
+There is no dynamic client registration and no `client_secret` — this is a
+public-client, PKCE-only design, matching what real requests to this server
+actually send. `client_id` is accepted as an opaque label, not validated;
+the security boundary is (1) the visitor must be an authenticated WordPress
+user with `edit_posts` to reach the consent screen at all, and (2)
+`redirect_uri` must match an explicit allow-list
+(`emcp_oauth_allowed_redirect_uris` filter) checked before any code is
+issued — every redirect back to the client happens only after that check,
+so this cannot become an open redirect.
+
+```
+GET /authorize
+  ?response_type=code
+  &client_id=<opaque>
+  &redirect_uri=<must be on the allow-list>
+  &code_challenge=<base64url(sha256(code_verifier))>
+  &code_challenge_method=S256
+  &state=<opaque, passed through unchanged>
+```
+
+Not logged in → redirected to `wp-login.php` with a `redirect_to` that
+returns here with the same params. Logged in without `edit_posts` → a plain
+403 page. Otherwise → a consent screen naming the account and the
+`redirect_uri`, with Approve/Deny buttons (CSRF-protected via a WordPress
+nonce). Approve issues a single-use code (5 minute TTL, stored as a
+transient) and redirects to `redirect_uri?code=...&state=...`. Deny
+redirects with `error=access_denied`.
+
+```
+POST /token
+  grant_type=authorization_code
+  &code=<from /authorize>
+  &redirect_uri=<must match the /authorize request exactly>
+  &code_verifier=<the PKCE verifier the challenge was derived from>
+```
+
+On success:
+
+```json
+{ "access_token": "base64(username:app_password)", "token_type": "Bearer", "scope": "elementor-mcp" }
+```
+
+The access token is not a bespoke credential — it's a real WordPress
+application password, minted via
+`WP_Application_Passwords::create_new_application_password()` the instant
+consent is given, named `Claude MCP (OAuth, <timestamp>)`. It's visible and
+individually revocable from **Users → Profile → Application Passwords**
+like any other, and needs no code on the resource-server side beyond the
+bearer-token shim every other route already uses. There is no refresh token
+grant — the underlying application password does not expire, so none is
+needed; a client that requests one gets `unsupported_grant_type` rather
+than a silent failure.
+
+Errors from `/token` follow RFC 6749 §5.2: `{ "error": "...", "error_description": "..." }`
+with `invalid_request`, `invalid_grant` (unknown/expired/replayed code,
+`redirect_uri` mismatch, or a `code_verifier` that doesn't match the
+original `code_challenge`), or `unsupported_grant_type`.
+
 ## MCP endpoint
 
 `POST /mcp` speaks JSON-RPC 2.0 over a single request/response — the

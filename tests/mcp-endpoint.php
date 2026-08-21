@@ -131,7 +131,8 @@ function is_user_logged_in() { return true; }
 function is_wp_error( $t ) { return $t instanceof WP_Error; }
 function get_bloginfo( $s = '' ) { return '6.9'; }
 function get_site_url() { return 'https://example.test'; }
-function home_url() { return 'https://example.test'; }
+function home_url( $path = '' ) { return 'https://example.test' . $path; }
+function untrailingslashit( $s ) { return rtrim( $s, '/' ); }
 function admin_url( $p = '' ) { return 'https://example.test/wp-admin/' . $p; }
 function add_query_arg( $args, $url = '' ) { return $url . '?' . http_build_query( $args ); }
 function get_current_user_id() { return 1; }
@@ -253,6 +254,7 @@ require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/class-emcp-library.p
 require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/class-emcp-scanner.php';
 require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/class-emcp-compose.php';
 require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/rest/class-emcp-rest-base.php';
+require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/class-emcp-oauth.php';
 require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/rest/class-emcp-rest-site.php';
 require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/mcp/class-emcp-mcp-schema.php';
 require __DIR__ . '/../plugin/elementor-mcp-bridge/includes/mcp/class-emcp-mcp-guard.php';

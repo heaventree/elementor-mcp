@@ -157,22 +157,23 @@ Several sites — set `ELEMENTOR_MCP_SITES` to a JSON array:
 
 ### Connecting a client to the WordPress MCP endpoint (recommended)
 
-The endpoint is `https://example.com/wp-json/elementor-mcp/v1/mcp`. It needs
-one credential: `base64(username:app_password)`, sent either as HTTP Basic
-(what WordPress itself expects) or as a bearer token (what MCP clients whose
-connector UI only offers a single "token" field expect — the bridge accepts
-both, see [Authentication](#authentication) below).
+The endpoint is `https://example.com/wp-json/elementor-mcp/v1/mcp`.
 
-For claude.ai: **Settings → Connectors → Add custom connector**, paste the
-URL, and provide the token in whichever auth field the UI offers.
+**claude.ai (web or desktop):** **Settings → Connectors → Add custom
+connector**, paste the URL, and continue — no token to generate or paste
+anywhere. It runs an OAuth flow on its own: you're sent to your site to log
+in (if needed) and approve the connection, then straight back to claude.ai,
+connected. See [Authentication](#authentication) for what that mints behind
+the scenes.
 
-To generate the token value:
+**Any other MCP client:** if it accepts a static token instead, use
+`base64(username:app_password)` as either HTTP Basic or a bearer token:
 
 ```bash
 echo -n 'your-user:abcd efgh ijkl mnop qrst uvwx' | base64
 ```
 
-To check the endpoint directly:
+To check the endpoint directly, either way works for a plain `curl` test:
 
 ```bash
 curl -u 'your-user:abcd efgh ijkl mnop qrst uvwx' \
@@ -209,8 +210,11 @@ Or by editing an MCP client config directly:
 
 ## Authentication
 
-Every route — REST and MCP alike — is protected by a WordPress application
-password (**Users → Profile → Application Passwords**), sent as HTTP Basic:
+Two ways in, and which one applies depends on the client, not on you:
+
+**Direct — HTTP Basic or bearer, with an application password.** Every
+route — REST and MCP alike — accepts a WordPress application password
+(**Users → Profile → Application Passwords**) sent as HTTP Basic:
 
 ```
 Authorization: Basic base64(username:app_password)
@@ -223,15 +227,41 @@ endpoint additionally accepts the same value as a bearer token —
 Authorization: Bearer base64(username:app_password)
 ```
 
-— for MCP clients whose connector UI only exposes a single "token" field
-rather than separate username/password fields. It is the same credential
-either way, just two header shapes; there is no separate "MCP token" to
-generate. This only ever activates as a fallback, when Basic auth did not
-already resolve a user.
+— for MCP clients whose connector UI only exposes a single "token" field.
+Same credential, two header shapes; there is no separate "MCP token" to
+generate. This is what the `curl` examples in this README use, and it is
+enough for the local Node server, direct REST calls, and any MCP client that
+accepts a static token.
 
-If authentication fails with a 401 and the credentials are correct, the
-server is likely running under CGI/FastCGI, which strips the `Authorization`
-header before PHP sees it. Add this to `.htaccess` above the WordPress block:
+**OAuth — for clients that require it.** claude.ai's custom connector, on
+both web and desktop, does not accept a static token: it runs a full
+authorization-code flow with PKCE (RFC 6749 + RFC 7636) against the
+connector's own origin, the same as any other OAuth-only remote MCP server.
+The plugin implements that flow — `GET/POST /authorize`, `POST /token`, plus
+the RFC 8414 and RFC 9728 discovery documents — entirely to satisfy this
+requirement; it does not add any capability beyond what the direct route
+already offers, and the local Node server never needs it.
+
+You do not generate anything for this path yourself. Add the custom
+connector in claude.ai with the URL `https://example.com/wp-json/elementor-mcp/v1/mcp`
+and it drives the flow on its own: a redirect to your site to log in (if not
+already) and approve access, then straight back to claude.ai, connected.
+What gets minted behind the scenes is, again, an ordinary application
+password — named `Claude MCP (OAuth, <timestamp>)` — so it shows up
+individually in **Users → Profile → Application Passwords** and can be
+revoked from there like any other, with nothing extra to track.
+
+The redirect target is checked against an allow-list
+(`emcp_oauth_allowed_redirect_uris`, defaulting to claude.ai's confirmed
+callback) before any code is issued, so this cannot be turned into an open
+redirect by a crafted link.
+
+### CGI/FastCGI
+
+If direct authentication fails with a 401 and the credentials are correct,
+the server is likely running under CGI/FastCGI, which strips the
+`Authorization` header before PHP sees it. Add this to `.htaccess` above the
+WordPress block:
 
 ```apache
 RewriteCond %{HTTP:Authorization} ^(.*)
@@ -332,10 +362,12 @@ php tests/tree-mutators.php  # 236 assertions: PHP tree mutators against the sam
 php tests/mcp-endpoint.php   # 51 assertions: full JSON-RPC round trips against an
                               # in-memory WordPress — initialize, tools/list, and
                               # real element edits through the hash-guarded write path
+php tests/oauth-flow.php     # 46 assertions: the full authorization-code + PKCE
+                              # round trip, driven directly against EMCP_OAuth
 ./scripts/package-plugin.sh  # build the installable zip
 ```
 
-Three PHP harnesses, in order of what they prove:
+Four PHP harnesses, in order of what they prove:
 
 - `tests/plugin-load.php` — the plugin loads and every route resolves to a
   callable handler and permission callback. Catches activation fatals before
@@ -349,6 +381,15 @@ Three PHP harnesses, in order of what they prove:
   the snapshot-then-restore undo path. It stubs WordPress rather than
   Elementor, so it exercises the bridge's own fallback write path, not
   `Document::save()` — that half still needs a real site.
+- `tests/oauth-flow.php` — discovery metadata; the not-logged-in-redirects-
+  to-login case; consent approve and deny; PKCE accepted with the correct
+  verifier and rejected with the wrong one; a used code rejected on replay;
+  a mismatched `redirect_uri` rejected; an untrusted `redirect_uri` refused
+  as a page rather than ever becoming a redirect; and the token this
+  endpoint issues successfully authenticating through the existing
+  bearer-token shim with no changes needed there. It calls `EMCP_OAuth`'s
+  private handlers directly via reflection, since the real request router
+  ends in `exit`.
 
 ## Licence
 
