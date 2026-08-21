@@ -24,15 +24,20 @@ const { prompts } = await client.listPrompts();
 console.log(`tools: ${tools.length}`);
 console.log(`prompts: ${prompts.length}`);
 
+// A description is the only thing the model has to choose a tool by, so a thin
+// one is a defect rather than a note. Collect the problems and fail at the end,
+// so one run reports all of them.
+const problems = [];
+
 const missingDescription = tools.filter((t) => !t.description || t.description.length < 40);
 if (missingDescription.length) {
-  console.log(`WEAK DESCRIPTIONS: ${missingDescription.map((t) => t.name).join(', ')}`);
+  problems.push(`WEAK DESCRIPTIONS: ${missingDescription.map((t) => t.name).join(', ')}`);
 }
 
 // Every tool should declare annotations so clients can reason about safety.
 const missingAnnotations = tools.filter((t) => !t.annotations);
 if (missingAnnotations.length) {
-  console.log(`MISSING ANNOTATIONS: ${missingAnnotations.map((t) => t.name).join(', ')}`);
+  problems.push(`MISSING ANNOTATIONS: ${missingAnnotations.map((t) => t.name).join(', ')}`);
 }
 
 console.log('---- tool names ----');
@@ -50,4 +55,11 @@ console.log('---- elementor_list_sites ----');
 console.log(res.content[0].text.slice(0, 300));
 
 await client.close();
+
+if (problems.length) {
+  for (const problem of problems) console.log(problem);
+  console.log('SMOKE FAILED');
+  process.exit(1);
+}
+
 console.log('SMOKE OK');

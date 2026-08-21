@@ -47,7 +47,7 @@ does the structural work there, so a 400 KB page can be edited without that JSON
 ever entering the model's context.
 
 That split is deliberate. Tree surgery lives in TypeScript where it is unit
-tested against 59 cases; the PHP side stays thin and delegates to Elementor.
+tested against 60 cases; the PHP side stays thin and delegates to Elementor.
 
 ## Install
 
@@ -58,7 +58,7 @@ Plugin** in wp-admin:
 
 ```bash
 ./scripts/package-plugin.sh
-# build/elementor-mcp-bridge-1.0.0.zip
+# build/elementor-mcp-bridge-1.0.1.zip
 ```
 
 The script refuses to build if any file fails `php -l`, so a broken plugin
@@ -234,12 +234,14 @@ sites are built on. `elementor_site_status` reports whether it is available.
 ## Development
 
 ```bash
+npm run verify           # everything below except docs and packaging
 npm run build            # compile
-npm test                 # 59 unit tests
+npm test                 # 60 unit tests
 npm run typecheck        # source and tests
 npm run smoke            # boot the server and exercise the MCP handshake
+npm run test:guard       # drive the server against a mock site
+npm run test:plugin      # load the plugin and register all 32 routes
 npm run docs             # regenerate docs/TOOLS.md from the running server
-php tests/plugin-load.php   # load the plugin and register all 32 routes
 ./scripts/package-plugin.sh # build the installable zip
 ```
 
@@ -247,6 +249,15 @@ php tests/plugin-load.php   # load the plugin and register all 32 routes
 and asserts every route has a callable handler and permission callback. It is
 not a substitute for a real site, but it catches the activation fatals that a
 zip would otherwise hide until upload.
+
+`tests/capability-guard.mjs` runs the built server over stdio against
+`tests/mock-bridge.mjs`, a stand-in bridge whose element registry, widget
+registry and stored documents a test dictates. That reaches the behaviour that
+depends on the site rather than on our code: refusing an element type the site
+cannot render, surfacing a save warning, standing down when a site reports no
+registry at all, and re-applying a write that raced another editor. It asserts
+against the mock's write log rather than the wording, so a regression that
+keeps the message and loses the guard still fails.
 
 ## Licence
 
