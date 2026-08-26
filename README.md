@@ -77,7 +77,7 @@ Plugin** in wp-admin:
 
 ```bash
 ./scripts/package-plugin.sh
-# build/elementor-mcp-bridge-1.0.0.zip
+# build/elementor-mcp-bridge-1.2.0.zip
 ```
 
 The script refuses to build if any file fails `php -l`, so a broken plugin
@@ -351,10 +351,12 @@ sites are built on. `elementor_site_status` reports whether it is available.
 ## Development
 
 ```bash
+npm run verify               # every check below, except docs and packaging
 npm run build                # compile the Node server
 npm test                     # 60 TypeScript unit tests
 npm run typecheck            # source and tests
-npm run smoke                 # boot the Node server and exercise the MCP handshake
+npm run smoke                # boot the Node server and exercise the MCP handshake
+npm run test:guard           # drive the Node server against a mock bridge
 npm run docs                 # regenerate docs/TOOLS.md from the running Node server
 php tests/plugin-load.php    # load the plugin, register all 33 REST routes
 php tests/tree-mutators.php  # 236 assertions: PHP tree mutators against the same
@@ -390,6 +392,15 @@ Four PHP harnesses, in order of what they prove:
   bearer-token shim with no changes needed there. It calls `EMCP_OAuth`'s
   private handlers directly via reflection, since the real request router
   ends in `exit`.
+
+`tests/capability-guard.mjs` runs the built server over stdio against
+`tests/mock-bridge.mjs`, a stand-in bridge whose element registry, widget
+registry and stored documents a test dictates. That reaches the behaviour that
+depends on the site rather than on our code: refusing an element type the site
+cannot render, surfacing a save warning, standing down when a site reports no
+registry at all, and re-applying a write that raced another editor. It asserts
+against the mock's write log rather than the wording, so a regression that
+keeps the message and loses the guard still fails.
 
 ## Licence
 
