@@ -1,6 +1,6 @@
 {
   "name": "elementor-mcp",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "MCP server for deep, safe control of Elementor and WordPress sites",
   "license": "MIT",
   "type": "module",

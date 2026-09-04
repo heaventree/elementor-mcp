@@ -63,11 +63,12 @@ class EMCP_REST_MCP extends EMCP_REST_Base {
 			// resource_metadata is the MCP authorization spec's addition,
 			// pointing at RFC 9728 discovery so a compliant client can find
 			// this server's OAuth endpoints from a bare 401 rather than
-			// guessing /authorize and /token at the site root.
+			// probing the generic well-known path at the site root — which,
+			// on a site with a sibling MCP plugin, may belong to that plugin.
 			header(
 				sprintf(
 					'WWW-Authenticate: Bearer resource_metadata="%s"',
-					esc_url_raw( EMCP_OAuth::issuer() . '/.well-known/oauth-protected-resource' )
+					esc_url_raw( EMCP_OAuth::protected_resource_metadata_url() )
 				)
 			);
 		}
