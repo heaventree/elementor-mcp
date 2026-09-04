@@ -4,7 +4,7 @@ Tags: elementor, mcp, ai, rest-api, page-builder
 Requires at least: 5.9
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -85,6 +85,33 @@ Routes still register, and `/status` reports what is missing rather than
 returning a confusing 404.
 
 == Changelog ==
+
+= 1.3.0 =
+* OAuth endpoints are now scoped under this plugin's own slug, so the bridge
+  can share a site with other MCP plugins (AI SEO MCP, AI Security MCP, Easy
+  MCP AI) without a first-come collision over /authorize, /token and the
+  generic /.well-known/* paths. The issuer is now <site>/elementor-mcp, its
+  RFC 8414 metadata lives at /.well-known/oauth-authorization-server/
+  elementor-mcp, the RFC 9728 protected-resource document at /.well-known/
+  oauth-protected-resource/wp-json/elementor-mcp/v1/mcp, and the endpoints at
+  /elementor-mcp/authorize, /elementor-mcp/token and /elementor-mcp/revoke.
+  The generic well-known paths are still answered when no known competing
+  plugin is active (filter: emcp_oauth_claim_generic_wellknown), so a solo
+  install keeps working for clients that probe the bare path.
+* BREAKING for existing connectors: /authorize and /token at the site root
+  are no longer served. A claude.ai connector added against 1.2.0 must be
+  removed and re-added once, so it re-runs discovery against the new paths.
+  Purge any full-page cache first.
+* Token hygiene: the application password minted on each token exchange is
+  now named deterministically per client ("Elementor MCP (<client>)") and
+  replaces the previous one for that client instead of accumulating a new
+  "Claude MCP (OAuth, <timestamp>)" entry on every reconnect. New RFC 7009
+  revocation endpoint (POST /elementor-mcp/revoke with token=...) so a
+  client can disconnect cleanly.
+* Discovery documents and the token response now send nocache_headers()
+  (a full-page cache serving a stale discovery document is a real failure
+  mode seen live) and CORS headers with an OPTIONS preflight answer, so a
+  client's browser-side JS can complete discovery cross-origin.
 
 = 1.2.0 =
 * Added a full OAuth 2.0 authorization server (RFC 6749) with mandatory

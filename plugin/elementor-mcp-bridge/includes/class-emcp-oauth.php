@@ -13,9 +13,9 @@ defined( 'ABSPATH' ) || exit;
  * Some MCP clients — confirmed for claude.ai's custom connector, on both web
  * and desktop — do not send credentials as a header. They run a full
  * authorization-code-with-PKCE flow (RFC 6749 + RFC 7636) against the
- * connector's own origin: a browser redirect to `/authorize`, then a
- * server-to-server `POST /token`. Without both endpoints present, the
- * `/authorize` redirect 404s before the user ever sees a consent screen —
+ * connector's own origin: a browser redirect to the authorization endpoint,
+ * then a server-to-server POST to the token endpoint. Without both present,
+ * the authorize redirect 404s before the user ever sees a consent screen —
  * which is what happened here.
  *
  * This intentionally does not implement dynamic client registration
@@ -35,6 +35,30 @@ defined( 'ABSPATH' ) || exit;
  * means every issued token is individually visible and revocable from
  * Users > Profile > Application Passwords like any other, with no parallel
  * token store to keep secure or to leak.
+ *
+ * PATH SCOPING (1.3.0). Every endpoint lives under this plugin's own slug:
+ * the issuer is `<site>/elementor-mcp`, so per RFC 8414 §3.1 path insertion
+ * its metadata is at `/.well-known/oauth-authorization-server/elementor-mcp`,
+ * the protected-resource document (RFC 9728 §3.1) is keyed on the MCP
+ * endpoint's own path, and authorize / token / revoke sit under
+ * `/elementor-mcp/`. 1.2.0 claimed `/authorize`, `/token` and the *generic*
+ * well-known paths at the site root on `init` priority 1 — a first-come
+ * collision with any sibling MCP plugin (AI SEO MCP, AI Security MCP, Easy
+ * MCP AI…) that does the same, decided by plugin load order, with the loser's
+ * connector silently authorising against the wrong server. The generic
+ * well-known paths are now claimed only when no known competing plugin is
+ * active (see may_claim_generic_wellknown()), so a solo install still
+ * answers a client that probes the bare path, but we never steal it.
+ *
+ * Three further fixes carried over from the same class of bug found live on
+ * the sibling plugins: discovery and token responses send nocache_headers()
+ * (a full-page cache serving a stale discovery document is a real,
+ * previously-hit failure mode), CORS headers are sent on discovery, token
+ * and revoke (claude.ai's browser-side JS can hit these cross-origin and
+ * discards the response without them), and the application password minted
+ * per token exchange is named deterministically per client so a
+ * reconnecting client replaces its previous credential instead of leaving an
+ * ever-growing pile of "Claude MCP (OAuth, <timestamp>)" entries behind.
  */
 class EMCP_OAuth {
 
@@ -44,15 +68,18 @@ class EMCP_OAuth {
 	const CODE_TTL = 5 * MINUTE_IN_SECONDS;
 
 	/**
+	 * The path segment every endpoint of this authorization server lives under.
+	 */
+	const SLUG = 'elementor-mcp';
+
+	/**
 	 * Register the request interception.
 	 *
-	 * These paths are handled at the bare site root — not under /wp-json/ —
-	 * because that is where OAuth clients, including the one that triggered
-	 * this, look by convention when a resource server does not publish
-	 * metadata pointing elsewhere. Handling them on the `init` hook means
-	 * matching the raw request URI directly: no rewrite rule to register, no
-	 * permalinks to flush, and no dependency on a matching page or post
-	 * existing at that slug.
+	 * Paths are handled on the `init` hook by matching the raw request URI:
+	 * no rewrite rule to register, no permalinks to flush, and no dependency
+	 * on a matching page or post existing at that slug. Priority 1 so a theme
+	 * or plugin that hooks `init` to render something at these paths never
+	 * gets the chance.
 	 *
 	 * @return void
 	 */
@@ -64,7 +91,7 @@ class EMCP_OAuth {
 	 * Redirect URIs consent is permitted to complete to.
 	 *
 	 * Deliberately narrow: only the one redirect_uri actually observed from a
-	 * real claude.ai connector attempt. A crafted /authorize link pointing
+	 * real claude.ai connector attempt. A crafted authorize link pointing
 	 * anywhere else is refused before a code is ever issued, which is what
 	 * makes an unvalidated client_id safe to accept. Extend via the filter if
 	 * another client (e.g. Claude Desktop, if it turns out to use a
@@ -89,18 +116,165 @@ class EMCP_OAuth {
 		return in_array( $uri, self::allowed_redirect_uris(), true );
 	}
 
+	/* ------------------------------------------------------------------ *
+	 * URLs. Everything a client, a doc, or a sibling class needs to know
+	 * about where this server lives comes from here, so a path change is
+	 * a one-place edit.
+	 * ------------------------------------------------------------------ */
+
 	/**
-	 * This authorization server's issuer identifier: the site's own origin.
+	 * The site's own origin (scheme + host + any subdirectory), no trailing slash.
+	 *
+	 * @return string
+	 */
+	public static function site_origin() {
+		return untrailingslashit( home_url() );
+	}
+
+	/**
+	 * This authorization server's issuer identifier.
+	 *
+	 * Carries the plugin slug as a path component so that RFC 8414 §3.1
+	 * path insertion makes its metadata URL unique to this plugin.
 	 *
 	 * @return string
 	 */
 	public static function issuer() {
-		return untrailingslashit( home_url() );
+		return self::site_origin() . '/' . self::SLUG;
+	}
+
+	/**
+	 * The MCP endpoint's path relative to the site origin, no leading slash.
+	 *
+	 * @return string
+	 */
+	public static function resource_path() {
+		return 'wp-json/' . EMCP_REST_NAMESPACE . '/mcp';
+	}
+
+	/**
+	 * The protected resource (the MCP endpoint) as an absolute URL.
+	 *
+	 * @return string
+	 */
+	public static function resource_url() {
+		return self::site_origin() . '/' . self::resource_path();
+	}
+
+	/**
+	 * RFC 8414 authorization-server metadata URL, path-inserted for this issuer.
+	 *
+	 * @return string
+	 */
+	public static function authorization_server_metadata_url() {
+		return self::site_origin() . '/.well-known/oauth-authorization-server/' . self::SLUG;
+	}
+
+	/**
+	 * RFC 9728 protected-resource metadata URL, keyed on the resource path.
+	 *
+	 * @return string
+	 */
+	public static function protected_resource_metadata_url() {
+		return self::site_origin() . '/.well-known/oauth-protected-resource/' . self::resource_path();
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function authorize_url() {
+		return self::issuer() . '/authorize';
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function token_url() {
+		return self::issuer() . '/token';
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function revoke_url() {
+		return self::issuer() . '/revoke';
 	}
 
 	/* ------------------------------------------------------------------ *
 	 * Request routing.
 	 * ------------------------------------------------------------------ */
+
+	/**
+	 * Plugins that also publish OAuth discovery at the generic well-known
+	 * paths. If any is active we leave those paths alone.
+	 *
+	 * @return string[] Plugin basenames.
+	 */
+	public static function competing_oauth_plugins() {
+		return (array) apply_filters(
+			'emcp_oauth_competing_oauth_plugins',
+			array(
+				'ai-seo-mcp/ai-seo-mcp.php',
+				'ai-security-mcp/ai-security-mcp.php',
+				'easy-mcp-ai/easy-mcp-ai.php',
+				'royal-mcp/royal-mcp.php',
+				'mcp-adapter/mcp-adapter.php',
+			)
+		);
+	}
+
+	/**
+	 * May this plugin answer the generic (un-scoped) well-known paths?
+	 *
+	 * A client that has only the MCP endpoint URL and no metadata pointer
+	 * will probe `/.well-known/oauth-protected-resource` at the bare site
+	 * root. On a site where this is the only MCP plugin, answering there is
+	 * a convenience; on a site with a sibling, answering there steals the
+	 * sibling's connection. So: answer only when uncontested, and let a
+	 * site owner override either way with the filter.
+	 *
+	 * @return bool
+	 */
+	public static function may_claim_generic_wellknown() {
+		$active    = (array) get_option( 'active_plugins', array() );
+		$contested = (bool) array_intersect( $active, self::competing_oauth_plugins() );
+
+		return (bool) apply_filters( 'emcp_oauth_claim_generic_wellknown', ! $contested );
+	}
+
+	/**
+	 * Map a request path to the handler that owns it.
+	 *
+	 * Pure: no side effects, no exit, so the routing table is directly
+	 * testable without ever hitting the real request interceptor.
+	 *
+	 * @param string $path Request path, no query string, no trailing slash.
+	 * @return string|null One of authorize|token|revoke|as-metadata|rs-metadata, or null.
+	 */
+	public static function route_for_path( $path ) {
+		$scoped = array(
+			'/' . self::SLUG . '/authorize'                                => 'authorize',
+			'/' . self::SLUG . '/token'                                    => 'token',
+			'/' . self::SLUG . '/revoke'                                   => 'revoke',
+			'/.well-known/oauth-authorization-server/' . self::SLUG        => 'as-metadata',
+			'/.well-known/oauth-protected-resource/' . self::resource_path() => 'rs-metadata',
+		);
+
+		if ( isset( $scoped[ $path ] ) ) {
+			return $scoped[ $path ];
+		}
+
+		$generic = array(
+			'/.well-known/oauth-authorization-server' => 'as-metadata',
+			'/.well-known/oauth-protected-resource'   => 'rs-metadata',
+		);
+
+		if ( isset( $generic[ $path ] ) && self::may_claim_generic_wellknown() ) {
+			return $generic[ $path ];
+		}
+
+		return null;
+	}
 
 	/**
 	 * Handle the request if it matches one of the OAuth paths, exiting
@@ -109,28 +283,47 @@ class EMCP_OAuth {
 	 * @return void
 	 */
 	public static function maybe_handle_request() {
-		$path = self::request_path();
+		$route = self::route_for_path( self::request_path() );
 
-		switch ( $path ) {
-			case '/authorize':
-				self::handle_authorize();
-				exit;
-
-			case '/token':
-				self::handle_token();
-				exit;
-
-			case '/.well-known/oauth-authorization-server':
-				self::handle_authorization_server_metadata();
-				exit;
-
-			case '/.well-known/oauth-protected-resource':
-				self::handle_protected_resource_metadata();
-				exit;
-
-			default:
-				return;
+		if ( null === $route ) {
+			return;
 		}
+
+		// The browser-facing authorize flow is same-origin by nature (it is
+		// a top-level navigation). Everything else may be fetched cross-origin
+		// by a client's own JS and needs CORS, including a preflight answer.
+		if ( 'authorize' !== $route ) {
+			self::send_cors_headers();
+
+			if ( 'OPTIONS' === self::request_method() ) {
+				status_header( 204 );
+				exit;
+			}
+		}
+
+		switch ( $route ) {
+			case 'authorize':
+				self::handle_authorize();
+				break;
+
+			case 'token':
+				self::handle_token();
+				break;
+
+			case 'revoke':
+				self::handle_revoke();
+				break;
+
+			case 'as-metadata':
+				self::handle_authorization_server_metadata();
+				break;
+
+			case 'rs-metadata':
+				self::handle_protected_resource_metadata();
+				break;
+		}
+
+		exit;
 	}
 
 	/**
@@ -156,12 +349,36 @@ class EMCP_OAuth {
 		return '/' === $path ? $path : untrailingslashit( $path );
 	}
 
+	/**
+	 * @return string Upper-cased request method, GET when unknown.
+	 */
+	private static function request_method() {
+		return isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( (string) $_SERVER['REQUEST_METHOD'] ) : 'GET';
+	}
+
+	/**
+	 * CORS for the machine-facing endpoints.
+	 *
+	 * Discovery and token exchange can happen from a client's browser-side
+	 * JS on its own domain. Without Access-Control-Allow-Origin the browser
+	 * discards a perfectly successful response before the client sees it.
+	 * Wildcard origin is correct here: none of these endpoints rely on a
+	 * cookie, and the token endpoint is protected by PKCE, not by origin.
+	 *
+	 * @return void
+	 */
+	private static function send_cors_headers() {
+		header( 'Access-Control-Allow-Origin: *' );
+		header( 'Access-Control-Allow-Methods: GET, POST, OPTIONS' );
+		header( 'Access-Control-Allow-Headers: Content-Type, Authorization' );
+	}
+
 	/* ------------------------------------------------------------------ *
 	 * Discovery metadata (RFC 8414 / RFC 9728).
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * GET /.well-known/oauth-authorization-server
+	 * GET /.well-known/oauth-authorization-server/elementor-mcp
 	 *
 	 * @return void
 	 */
@@ -169,45 +386,46 @@ class EMCP_OAuth {
 		self::send_json(
 			array(
 				'issuer'                                => self::issuer(),
-				'authorization_endpoint'                => self::issuer() . '/authorize',
-				'token_endpoint'                         => self::issuer() . '/token',
+				'authorization_endpoint'                => self::authorize_url(),
+				'token_endpoint'                         => self::token_url(),
+				'revocation_endpoint'                    => self::revoke_url(),
 				'response_types_supported'              => array( 'code' ),
 				'grant_types_supported'                  => array( 'authorization_code' ),
 				'code_challenge_methods_supported'       => array( 'S256' ),
 				'token_endpoint_auth_methods_supported'  => array( 'none' ),
-				'scopes_supported'                       => array( 'elementor-mcp' ),
+				'revocation_endpoint_auth_methods_supported' => array( 'none' ),
+				'scopes_supported'                       => array( self::SLUG ),
 			)
 		);
 	}
 
 	/**
-	 * GET /.well-known/oauth-protected-resource
+	 * GET /.well-known/oauth-protected-resource/wp-json/elementor-mcp/v1/mcp
 	 *
 	 * @return void
 	 */
 	private static function handle_protected_resource_metadata() {
 		self::send_json(
 			array(
-				'resource'               => self::issuer() . '/wp-json/elementor-mcp/v1/mcp',
-				'authorization_servers'  => array( self::issuer() ),
+				'resource'                 => self::resource_url(),
+				'authorization_servers'    => array( self::issuer() ),
 				'bearer_methods_supported' => array( 'header' ),
+				'scopes_supported'         => array( self::SLUG ),
 			)
 		);
 	}
 
 	/* ------------------------------------------------------------------ *
-	 * /authorize
+	 * /elementor-mcp/authorize
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * GET or POST /authorize.
+	 * GET or POST authorize.
 	 *
 	 * @return void
 	 */
 	private static function handle_authorize() {
-		$method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( (string) $_SERVER['REQUEST_METHOD'] ) : 'GET';
-
-		if ( 'POST' === $method ) {
+		if ( 'POST' === self::request_method() ) {
 			self::handle_authorize_submit();
 			return;
 		}
@@ -278,7 +496,7 @@ class EMCP_OAuth {
 	}
 
 	/**
-	 * GET /authorize: show the login-required redirect, or a consent screen.
+	 * GET authorize: show the login-required redirect, or a consent screen.
 	 *
 	 * @return void
 	 */
@@ -290,7 +508,7 @@ class EMCP_OAuth {
 		}
 
 		if ( ! is_user_logged_in() ) {
-			$return_to = add_query_arg( $params, self::issuer() . '/authorize' );
+			$return_to = add_query_arg( $params, self::authorize_url() );
 			wp_safe_redirect( wp_login_url( $return_to ) );
 			return;
 		}
@@ -307,7 +525,7 @@ class EMCP_OAuth {
 	}
 
 	/**
-	 * POST /authorize: process the user's approve/deny decision.
+	 * POST authorize: process the user's approve/deny decision.
 	 *
 	 * @return void
 	 */
@@ -375,7 +593,7 @@ class EMCP_OAuth {
 	 */
 	private static function render_consent_screen( array $params ) {
 		$user = wp_get_current_user();
-		$site = esc_html( get_bloginfo( 'name' ) ?: self::issuer() );
+		$site = esc_html( get_bloginfo( 'name' ) ?: self::site_origin() );
 
 		status_header( 200 );
 		nocache_headers();
@@ -408,18 +626,18 @@ class EMCP_OAuth {
 			$site,
 			esc_html( $user->user_login ),
 			esc_html( $params['redirect_uri'] ),
-			esc_url( self::issuer() . '/authorize' ),
+			esc_url( self::authorize_url() ),
 			wp_nonce_field( 'emcp_oauth_authorize', 'emcp_nonce', true, false ),
 			$hidden_fields
 		);
 	}
 
 	/* ------------------------------------------------------------------ *
-	 * /token
+	 * /elementor-mcp/token
 	 * ------------------------------------------------------------------ */
 
 	/**
-	 * POST /token.
+	 * POST token.
 	 *
 	 * @return void
 	 */
@@ -479,9 +697,18 @@ class EMCP_OAuth {
 			return;
 		}
 
+		$name = self::application_password_name( isset( $record['client_id'] ) ? (string) $record['client_id'] : '' );
+
+		// One live credential per (user, client). A client that reconnects
+		// — claude.ai does this on every "reconnect" and on every fresh
+		// browser — replaces its previous password rather than stacking a
+		// new one next to it. Core also refuses a duplicate name outright,
+		// so this is required for correctness, not just tidiness.
+		self::revoke_application_passwords_named( $user->ID, $name );
+
 		$created = \WP_Application_Passwords::create_new_application_password(
 			$user->ID,
-			array( 'name' => 'Claude MCP (OAuth, ' . gmdate( 'Y-m-d H:i' ) . ' UTC)' )
+			array( 'name' => $name )
 		);
 
 		if ( is_wp_error( $created ) ) {
@@ -495,9 +722,103 @@ class EMCP_OAuth {
 			array(
 				'access_token' => base64_encode( $user->user_login . ':' . $raw_password ),
 				'token_type'   => 'Bearer',
-				'scope'        => 'elementor-mcp',
+				'scope'        => self::SLUG,
 			)
 		);
+	}
+
+	/**
+	 * The application password name for a given client.
+	 *
+	 * Deterministic per client_id so a reconnect replaces rather than
+	 * accumulates (see handle_token()). client_id is client-chosen and has
+	 * been observed in the wild as a long base64 blob, so it is reduced to
+	 * a safe, bounded label — it is only ever a name shown in the profile
+	 * screen, never a lookup key on its own.
+	 *
+	 * @param string $client_id Client identifier from the authorize request.
+	 * @return string
+	 */
+	public static function application_password_name( $client_id ) {
+		$label = preg_replace( '/[^A-Za-z0-9._-]+/', '-', (string) $client_id );
+		$label = trim( (string) $label, '-' );
+
+		if ( strlen( $label ) > 40 ) {
+			$label = substr( $label, 0, 32 ) . '-' . substr( md5( (string) $client_id ), 0, 7 );
+		}
+
+		if ( '' === $label ) {
+			$label = 'client';
+		}
+
+		return 'Elementor MCP (' . $label . ')';
+	}
+
+	/**
+	 * Delete every application password of $user_id carrying exactly $name.
+	 *
+	 * @param int    $user_id User.
+	 * @param string $name    Application password name.
+	 * @return int Number deleted.
+	 */
+	private static function revoke_application_passwords_named( $user_id, $name ) {
+		$deleted = 0;
+
+		foreach ( (array) \WP_Application_Passwords::get_user_application_passwords( $user_id ) as $item ) {
+			if ( isset( $item['name'], $item['uuid'] ) && $item['name'] === $name ) {
+				$result = \WP_Application_Passwords::delete_application_password( $user_id, $item['uuid'] );
+
+				if ( true === $result ) {
+					$deleted++;
+				}
+			}
+		}
+
+		return $deleted;
+	}
+
+	/* ------------------------------------------------------------------ *
+	 * /elementor-mcp/revoke (RFC 7009)
+	 * ------------------------------------------------------------------ */
+
+	/**
+	 * POST revoke: `token=<the access token>`.
+	 *
+	 * The token is base64(username:app_password); the matching application
+	 * password is found by checking the raw password against each of the
+	 * user's stored hashes (the same check core itself performs on
+	 * authentication) and deleted. Per RFC 7009 §2.2 an unknown or already
+	 * revoked token still gets a 200 — the caller's goal (that the token no
+	 * longer works) is met either way, and a distinguishable error would
+	 * only tell a third party whether a guessed token was ever valid.
+	 *
+	 * @return void
+	 */
+	private static function handle_revoke() {
+		$token = isset( $_POST['token'] ) ? trim( (string) $_POST['token'] ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing
+
+		if ( '' === $token ) {
+			self::send_token_error( 400, 'invalid_request', 'token is required.' );
+			return;
+		}
+
+		$decoded = base64_decode( $token, true );
+
+		if ( false !== $decoded && false !== strpos( $decoded, ':' ) ) {
+			list( $username, $raw_password ) = explode( ':', $decoded, 2 );
+			$user = ( '' !== $username ) ? get_user_by( 'login', $username ) : false;
+
+			if ( $user && '' !== $raw_password && class_exists( '\WP_Application_Passwords' ) ) {
+				foreach ( (array) \WP_Application_Passwords::get_user_application_passwords( $user->ID ) as $item ) {
+					if ( isset( $item['password'], $item['uuid'] ) && wp_check_password( $raw_password, $item['password'] ) ) {
+						\WP_Application_Passwords::delete_application_password( $user->ID, $item['uuid'] );
+						break;
+					}
+				}
+			}
+		}
+
+		self::send_json( array( 'revoked' => true ) );
 	}
 
 	/**
@@ -551,7 +872,7 @@ class EMCP_OAuth {
 	}
 
 	/**
-	 * A JSON error response from the /token endpoint, per RFC 6749 §5.2.
+	 * A JSON error response from the token/revoke endpoints, per RFC 6749 §5.2.
 	 *
 	 * @param int    $status HTTP status.
 	 * @param string $error  OAuth error code.
@@ -585,13 +906,19 @@ class EMCP_OAuth {
 	}
 
 	/**
-	 * A JSON response with no error envelope (discovery documents).
+	 * A 200 JSON response (discovery documents, token, revoke).
+	 *
+	 * Always uncacheable: a page cache that holds on to a discovery document
+	 * keeps handing clients endpoints from whatever build was live when it
+	 * was cached, and a cached token response would hand the same credential
+	 * to the next requester.
 	 *
 	 * @param array $data Data to encode.
 	 * @return void
 	 */
 	private static function send_json( array $data ) {
 		status_header( 200 );
+		nocache_headers();
 		header( 'Content-Type: application/json; charset=utf-8' );
 		echo wp_json_encode( $data, JSON_PRETTY_PRINT );
 	}

@@ -10,6 +10,7 @@
 error_reporting( E_ALL & ~E_DEPRECATED );
 define( 'ABSPATH', __DIR__ );
 define( 'MINUTE_IN_SECONDS', 60 );
+define( 'EMCP_REST_NAMESPACE', 'elementor-mcp/v1' );
 
 /* ------------------------------------------------------------------ *
  * Minimal WordPress stub: just enough for EMCP_OAuth to run.
@@ -23,6 +24,9 @@ $GLOBALS['emcp_test_last_status']  = null;
 $GLOBALS['emcp_test_last_redirect'] = null;   // [ 'fn' => 'safe'|'unsafe', 'url' => ... ]
 $GLOBALS['emcp_test_last_output']  = '';
 $GLOBALS['emcp_test_app_passwords_created'] = array();
+$GLOBALS['emcp_test_app_passwords_live']    = array(); // [ user_id => [ [ uuid, name, password(hash) ] ] ] — what get_user_application_passwords() returns
+$GLOBALS['emcp_test_options']               = array( 'active_plugins' => array() );
+$GLOBALS['emcp_test_nocache_calls']         = 0;
 
 class WP_Error {
 	public $code; public $message; public $data;
@@ -37,12 +41,33 @@ class WP_User { public $ID; public $user_login; public function __construct( $id
 class WP_Application_Passwords {
 	public static function create_new_application_password( $user_id, $args = array() ) {
 		if ( empty( $args['name'] ) ) return new WP_Error( 'application_password_empty_name', 'name required' );
-		$raw = 'raw' . bin2hex( random_bytes( 8 ) );
-		$item = array( 'uuid' => 'uuid-' . $user_id, 'name' => $args['name'], 'created' => time() );
-		$GLOBALS['emcp_test_app_passwords_created'][] = array( 'user_id' => $user_id, 'name' => $args['name'], 'raw' => $raw );
+		// Mirrors core: a second password with the same name is refused.
+		foreach ( self::get_user_application_passwords( $user_id ) as $existing ) {
+			if ( $existing['name'] === $args['name'] ) return new WP_Error( 'application_password_duplicate_name', 'Each application name should be unique.' );
+		}
+		$raw  = 'raw' . bin2hex( random_bytes( 8 ) );
+		$uuid = 'uuid-' . bin2hex( random_bytes( 4 ) );
+		$item = array( 'uuid' => $uuid, 'name' => $args['name'], 'password' => password_hash( $raw, PASSWORD_DEFAULT ), 'created' => time() );
+		$GLOBALS['emcp_test_app_passwords_created'][] = array( 'user_id' => $user_id, 'name' => $args['name'], 'raw' => $raw, 'uuid' => $uuid );
+		$GLOBALS['emcp_test_app_passwords_live'][ $user_id ][] = $item;
 		return array( $raw, $item );
 	}
+	public static function get_user_application_passwords( $user_id ) {
+		return $GLOBALS['emcp_test_app_passwords_live'][ $user_id ] ?? array();
+	}
+	public static function delete_application_password( $user_id, $uuid ) {
+		foreach ( $GLOBALS['emcp_test_app_passwords_live'][ $user_id ] ?? array() as $i => $item ) {
+			if ( $item['uuid'] === $uuid ) {
+				unset( $GLOBALS['emcp_test_app_passwords_live'][ $user_id ][ $i ] );
+				$GLOBALS['emcp_test_app_passwords_live'][ $user_id ] = array_values( $GLOBALS['emcp_test_app_passwords_live'][ $user_id ] );
+				return true;
+			}
+		}
+		return new WP_Error( 'application_password_not_found', 'not found' );
+	}
 }
+function wp_check_password( $password, $hash, $user_id = '' ) { return password_verify( $password, $hash ); }
+function get_option( $name, $default = false ) { return $GLOBALS['emcp_test_options'][ $name ] ?? $default; }
 
 function wp_is_application_passwords_available_for_user( $user ) { return true; }
 function get_userdata( $id ) { return $GLOBALS['emcp_test_users'][ (int) $id ] ?? false; }
@@ -85,7 +110,7 @@ function wp_nonce_field( $action, $name, $referer = true, $echo = true ) {
 }
 
 function status_header( $code ) { $GLOBALS['emcp_test_last_status'] = $code; }
-function nocache_headers() {}
+function nocache_headers() { $GLOBALS['emcp_test_nocache_calls']++; }
 // header() is a real PHP built-in and cannot be redeclared. EMCP_OAuth's own
 // Content-Type/status header() calls execute as harmless no-ops under the
 // CLI SAPI (there is no real connection to send them over). The only header
@@ -130,12 +155,13 @@ function run_capturing( $method, array $args = array() ) {
 	$GLOBALS['emcp_test_headers']       = array();
 	$GLOBALS['emcp_test_last_status']   = null;
 	$GLOBALS['emcp_test_last_redirect'] = null;
+	$GLOBALS['emcp_test_nocache_calls'] = 0;
 
 	ob_start();
 	$result = call_private( $method, $args );
 	$output = ob_get_clean();
 
-	return array( 'result' => $result, 'output' => $output, 'status' => $GLOBALS['emcp_test_last_status'], 'redirect' => $GLOBALS['emcp_test_last_redirect'] );
+	return array( 'result' => $result, 'output' => $output, 'status' => $GLOBALS['emcp_test_last_status'], 'redirect' => $GLOBALS['emcp_test_last_redirect'], 'nocache' => $GLOBALS['emcp_test_nocache_calls'] );
 }
 
 /** RFC 7636 S256, computed independently of EMCP_OAuth's own implementation. */
@@ -190,16 +216,53 @@ function authorize_and_approve( $redirect_uri, $challenge, $state = 'xyz', $clie
  * Discovery metadata
  * ================================================================== */
 
-$as_meta = json_decode( run_capturing( 'handle_authorization_server_metadata' )['output'], true );
-check( 'AS metadata: issuer matches the site', 'https://example.test' === $as_meta['issuer'] );
-check( 'AS metadata: authorization_endpoint is /authorize', 'https://example.test/authorize' === $as_meta['authorization_endpoint'] );
-check( 'AS metadata: token_endpoint is /token', 'https://example.test/token' === $as_meta['token_endpoint'] );
+$as_run  = run_capturing( 'handle_authorization_server_metadata' );
+$as_meta = json_decode( $as_run['output'], true );
+check( 'AS metadata: issuer is the site origin plus the plugin slug (RFC 8414 path insertion)', 'https://example.test/elementor-mcp' === $as_meta['issuer'] );
+check( 'AS metadata: authorization_endpoint is under the plugin slug', 'https://example.test/elementor-mcp/authorize' === $as_meta['authorization_endpoint'] );
+check( 'AS metadata: token_endpoint is under the plugin slug', 'https://example.test/elementor-mcp/token' === $as_meta['token_endpoint'] );
+check( 'AS metadata: advertises a revocation_endpoint under the plugin slug', 'https://example.test/elementor-mcp/revoke' === $as_meta['revocation_endpoint'] );
 check( 'AS metadata: only S256 PKCE is advertised', array( 'S256' ) === $as_meta['code_challenge_methods_supported'] );
 check( 'AS metadata: no client auth required (public client)', array( 'none' ) === $as_meta['token_endpoint_auth_methods_supported'] );
+check( 'AS metadata: sent with nocache_headers() so a page cache can never serve a stale build\'s endpoints', $as_run['nocache'] >= 1 );
 
-$rs_meta = json_decode( run_capturing( 'handle_protected_resource_metadata' )['output'], true );
+$rs_run  = run_capturing( 'handle_protected_resource_metadata' );
+$rs_meta = json_decode( $rs_run['output'], true );
 check( 'RS metadata: points at the /mcp resource', 'https://example.test/wp-json/elementor-mcp/v1/mcp' === $rs_meta['resource'] );
-check( 'RS metadata: names this site as the authorization server', array( 'https://example.test' ) === $rs_meta['authorization_servers'] );
+check( 'RS metadata: names the scoped issuer as the authorization server', array( 'https://example.test/elementor-mcp' ) === $rs_meta['authorization_servers'] );
+check( 'RS metadata: sent with nocache_headers()', $rs_run['nocache'] >= 1 );
+
+/* URL helpers agree with the metadata (these are what the 401 header, the
+ * /status route and the docs all use — one source of truth). */
+check( 'url helpers: authorization-server metadata URL is path-inserted for this issuer', 'https://example.test/.well-known/oauth-authorization-server/elementor-mcp' === EMCP_OAuth::authorization_server_metadata_url() );
+check( 'url helpers: protected-resource metadata URL is keyed on the resource path', 'https://example.test/.well-known/oauth-protected-resource/wp-json/elementor-mcp/v1/mcp' === EMCP_OAuth::protected_resource_metadata_url() );
+
+/* ==================================================================
+ * Routing: scoped paths always; generic well-known paths only when no
+ * competing MCP/OAuth plugin is active; the 1.2.0 site-root paths never.
+ * ================================================================== */
+
+check( 'routing: /elementor-mcp/authorize', 'authorize' === EMCP_OAuth::route_for_path( '/elementor-mcp/authorize' ) );
+check( 'routing: /elementor-mcp/token', 'token' === EMCP_OAuth::route_for_path( '/elementor-mcp/token' ) );
+check( 'routing: /elementor-mcp/revoke', 'revoke' === EMCP_OAuth::route_for_path( '/elementor-mcp/revoke' ) );
+check( 'routing: scoped AS metadata path', 'as-metadata' === EMCP_OAuth::route_for_path( '/.well-known/oauth-authorization-server/elementor-mcp' ) );
+check( 'routing: scoped RS metadata path (keyed on the resource path)', 'rs-metadata' === EMCP_OAuth::route_for_path( '/.well-known/oauth-protected-resource/wp-json/elementor-mcp/v1/mcp' ) );
+check( 'routing: the 1.2.0 site-root /authorize is no longer claimed', null === EMCP_OAuth::route_for_path( '/authorize' ) );
+check( 'routing: the 1.2.0 site-root /token is no longer claimed', null === EMCP_OAuth::route_for_path( '/token' ) );
+check( 'routing: an unrelated path is ignored', null === EMCP_OAuth::route_for_path( '/some/page' ) );
+
+$GLOBALS['emcp_test_options']['active_plugins'] = array( 'elementor/elementor.php' );
+check( 'routing (no competitor active): generic AS well-known path is answered', 'as-metadata' === EMCP_OAuth::route_for_path( '/.well-known/oauth-authorization-server' ) );
+check( 'routing (no competitor active): generic RS well-known path is answered', 'rs-metadata' === EMCP_OAuth::route_for_path( '/.well-known/oauth-protected-resource' ) );
+
+$GLOBALS['emcp_test_options']['active_plugins'] = array( 'elementor/elementor.php', 'ai-security-mcp/ai-security-mcp.php' );
+check( 'routing (AI Security MCP active): generic AS well-known path is left to the sibling', null === EMCP_OAuth::route_for_path( '/.well-known/oauth-authorization-server' ) );
+check( 'routing (AI Security MCP active): generic RS well-known path is left to the sibling', null === EMCP_OAuth::route_for_path( '/.well-known/oauth-protected-resource' ) );
+check( 'routing (AI Security MCP active): the scoped paths still work', 'as-metadata' === EMCP_OAuth::route_for_path( '/.well-known/oauth-authorization-server/elementor-mcp' ) );
+
+$GLOBALS['emcp_test_options']['active_plugins'] = array( 'elementor/elementor.php', 'easy-mcp-ai/easy-mcp-ai.php' );
+check( 'routing (Easy MCP AI active): generic well-known path is left to it', null === EMCP_OAuth::route_for_path( '/.well-known/oauth-protected-resource' ) );
+$GLOBALS['emcp_test_options']['active_plugins'] = array();
 
 /* ==================================================================
  * /authorize — GET (prompt)
@@ -213,6 +276,7 @@ $_GET = array(
 $run = run_capturing( 'handle_authorize_prompt' );
 check( 'authorize (logged out): redirects to login, not the consent screen', $run['redirect'] && false !== strpos( $run['redirect']['url'], 'wp-login.php' ) );
 check( 'authorize (logged out): preserves the original request in redirect_to', false !== strpos( urldecode( urldecode( $run['redirect']['url'] ) ), $REDIRECT_URI ) );
+check( 'authorize (logged out): redirect_to returns to the SCOPED authorize endpoint, not the site root', false !== strpos( urldecode( urldecode( $run['redirect']['url'] ) ), 'https://example.test/elementor-mcp/authorize' ) );
 
 login_as_agent( false ); // logged in, but lacks edit_posts
 $run = run_capturing( 'handle_authorize_prompt' );
@@ -224,6 +288,7 @@ check( 'authorize (valid): renders a consent screen', false !== strpos( $run['ou
 check( 'authorize (valid): shows which account is granting access', false !== strpos( $run['output'], 'agent' ) );
 check( 'authorize (valid): shows the redirect_uri for the user to verify', false !== strpos( $run['output'], $REDIRECT_URI ) );
 check( 'authorize (valid): carries the client\'s state through as a hidden field', false !== strpos( $run['output'], 'value="s1"' ) );
+check( 'authorize (valid): the consent form posts back to the SCOPED authorize endpoint', false !== strpos( $run['output'], 'action="https://example.test/elementor-mcp/authorize"' ) );
 
 $_GET['redirect_uri'] = 'https://evil.example/steal';
 $run = run_capturing( 'handle_authorize_prompt' );
@@ -320,7 +385,34 @@ list( $issued_user, $issued_pw ) = explode( ':', (string) $decoded, 2 );
 check( 'token (valid): username matches the account that approved consent', 'agent' === $issued_user );
 check( 'token (valid): a real application password was minted for that user', 1 === count( $GLOBALS['emcp_test_app_passwords_created'] ) && 1 === $GLOBALS['emcp_test_app_passwords_created'][0]['user_id'] );
 check( 'token (valid): the raw password in the token matches what was minted', $issued_pw === $GLOBALS['emcp_test_app_passwords_created'][0]['raw'] );
-check( 'token (valid): the application password is named for easy identification/revocation', false !== strpos( $GLOBALS['emcp_test_app_passwords_created'][0]['name'], 'Claude MCP' ) );
+check( 'token (valid): the application password is named per client for identification/revocation', 'Elementor MCP (test-client)' === $GLOBALS['emcp_test_app_passwords_created'][0]['name'] );
+check( 'token (valid): the token response is sent with nocache_headers()', $run['nocache'] >= 1 );
+
+// Reconnect with the SAME client: the previous password is replaced, not stacked.
+login_as_agent( true );
+list( $verifier_r, $challenge_r ) = pkce_pair();
+$code_r = authorize_and_approve( $REDIRECT_URI, $challenge_r, 'reconnect' );
+logout();
+$_POST = array( 'grant_type' => 'authorization_code', 'code' => $code_r, 'redirect_uri' => $REDIRECT_URI, 'code_verifier' => $verifier_r );
+$run_r = run_capturing( 'handle_token' );
+$reconnect_token = json_decode( $run_r['output'], true )['access_token'] ?? null;
+check( 'token (reconnect, same client): a new token is issued', 200 === $run_r['status'] && ! empty( $reconnect_token ) );
+check( 'token (reconnect, same client): the user still has exactly ONE live password for that client', 1 === count( array_filter( WP_Application_Passwords::get_user_application_passwords( 1 ), fn( $p ) => 'Elementor MCP (test-client)' === $p['name'] ) ) );
+check( 'token (reconnect, same client): the earlier token\'s password is gone', ! in_array( $GLOBALS['emcp_test_app_passwords_created'][0]['uuid'], array_column( WP_Application_Passwords::get_user_application_passwords( 1 ), 'uuid' ), true ) );
+
+// A DIFFERENT client gets its own password alongside.
+login_as_agent( true );
+list( $verifier_o, $challenge_o ) = pkce_pair();
+$code_o = authorize_and_approve( $REDIRECT_URI, $challenge_o, 'other', 'other-client' );
+logout();
+$_POST = array( 'grant_type' => 'authorization_code', 'code' => $code_o, 'redirect_uri' => $REDIRECT_URI, 'code_verifier' => $verifier_o );
+run_capturing( 'handle_token' );
+check( 'token (different client): does not disturb the first client\'s password', 2 === count( WP_Application_Passwords::get_user_application_passwords( 1 ) ) );
+
+// Name derivation is bounded and safe even for the base64 blob claude.ai has been seen sending as client_id.
+$long_name = EMCP_OAuth::application_password_name( base64_encode( 'heaventree:X7B6 GwIT 1dDD 8BLx T9Kp ninw and then some more to push it well past forty characters' ) );
+check( 'app password name: a long/odd client_id is reduced to a bounded, safe label', strlen( $long_name ) <= strlen( 'Elementor MCP ()' ) + 40 && 1 === preg_match( '/^Elementor MCP \([A-Za-z0-9._-]+\)$/', $long_name ) );
+check( 'app password name: an empty client_id still yields a usable name', 'Elementor MCP (client)' === EMCP_OAuth::application_password_name( '' ) );
 
 // Replay: the same code cannot be exchanged twice.
 $_POST = array( 'grant_type' => 'authorization_code', 'code' => $code, 'redirect_uri' => $REDIRECT_URI, 'code_verifier' => $verifier );
@@ -355,6 +447,36 @@ check( 'token (redirect_uri mismatch): rejected', 'invalid_grant' === $body['err
 $_POST = array();
 
 /* ==================================================================
+ * /revoke (RFC 7009)
+ * ================================================================== */
+
+$_POST = array();
+$run = run_capturing( 'handle_revoke' );
+$body = json_decode( $run['output'], true );
+check( 'revoke (missing token): 400 invalid_request', 400 === $run['status'] && 'invalid_request' === $body['error'] );
+
+$live_before = count( WP_Application_Passwords::get_user_application_passwords( 1 ) );
+$_POST = array( 'token' => $reconnect_token );
+$run = run_capturing( 'handle_revoke' );
+$body = json_decode( $run['output'], true );
+check( 'revoke (valid token): 200 revoked', 200 === $run['status'] && true === ( $body['revoked'] ?? null ) );
+check( 'revoke (valid token): exactly that one password was deleted', $live_before - 1 === count( WP_Application_Passwords::get_user_application_passwords( 1 ) ) );
+check( 'revoke (valid token): sent with nocache_headers()', $run['nocache'] >= 1 );
+
+$run = run_capturing( 'handle_revoke' ); // same token again
+$body = json_decode( $run['output'], true );
+check( 'revoke (already revoked): still 200, per RFC 7009 — no oracle for token validity', 200 === $run['status'] && true === ( $body['revoked'] ?? null ) );
+
+$_POST = array( 'token' => base64_encode( 'nobody:whatever' ) );
+$run = run_capturing( 'handle_revoke' );
+check( 'revoke (unknown user): still 200, nothing deleted', 200 === $run['status'] && $live_before - 1 === count( WP_Application_Passwords::get_user_application_passwords( 1 ) ) );
+
+$_POST = array( 'token' => 'not-base64-at-all!!' );
+$run = run_capturing( 'handle_revoke' );
+check( 'revoke (garbage token): still 200, nothing deleted', 200 === $run['status'] && $live_before - 1 === count( WP_Application_Passwords::get_user_application_passwords( 1 ) ) );
+$_POST = array();
+
+/* ==================================================================
  * Closing the loop: the token this endpoint issues must be exactly what
  * EMCP_Auth::authenticate_bearer() already knows how to validate, with no
  * new code needed on that side.
@@ -362,11 +484,10 @@ $_POST = array();
 
 function wp_authenticate_application_password( $input_user, $username, $password ) {
 	if ( $input_user instanceof WP_User ) return $input_user;
-	foreach ( $GLOBALS['emcp_test_app_passwords_created'] as $entry ) {
-		$user = $GLOBALS['emcp_test_users'][ $entry['user_id'] ] ?? null;
-		if ( $user && $user->user_login === $username && hash_equals( $entry['raw'], $password ) ) {
-			return $user;
-		}
+	$user = get_user_by( 'login', $username );
+	if ( ! $user ) return new WP_Error( 'invalid_username', 'no such user' );
+	foreach ( WP_Application_Passwords::get_user_application_passwords( $user->ID ) as $item ) {
+		if ( wp_check_password( $password, $item['password'] ) ) return $user;
 	}
 	return new WP_Error( 'invalid_credentials', 'bad creds' );
 }
@@ -398,6 +519,14 @@ check(
 	'closing the loop: the OAuth-issued token authenticates through the existing bearer shim with zero new resource-server code',
 	1 === $resolved
 );
+
+$_POST = array( 'token' => $final_token );
+run_capturing( 'handle_revoke' );
+$_POST = array();
+$_SERVER['HTTP_AUTHORIZATION'] = 'Bearer ' . $final_token;
+$resolved_after = EMCP_Auth::authenticate_bearer( false );
+unset( $_SERVER['HTTP_AUTHORIZATION'] );
+check( 'closing the loop: after /revoke the same token no longer authenticates through the bearer shim', false === $resolved_after );
 
 /* ------------------------------------------------------------------ *
  * Report.

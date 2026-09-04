@@ -105,13 +105,30 @@ Change that with the `emcp_snapshot_limit` filter.
 
 ## OAuth 2.0 authorization server
 
-`GET/POST /authorize` and `POST /token`, at the site root (not under
-`/wp-json/`) — that's where OAuth clients look by convention, and where a
-real claude.ai connector attempt was observed sending its authorization
-request. PKCE (RFC 7636) is mandatory; `code_challenge_method` must be
-`S256`. Discovery documents are published per RFC 8414 and RFC 9728 at
-`/.well-known/oauth-authorization-server` and
-`/.well-known/oauth-protected-resource`.
+Every endpoint is scoped under this plugin's own slug so the bridge can share
+a site with other MCP plugins (AI SEO MCP, AI Security MCP, Easy MCP AI…)
+without fighting over the site root. The issuer is `<site>/elementor-mcp`;
+per RFC 8414 §3.1 path insertion its metadata is published at
+`/.well-known/oauth-authorization-server/elementor-mcp`, and the RFC 9728
+protected-resource document is keyed on the MCP endpoint's own path:
+`/.well-known/oauth-protected-resource/wp-json/elementor-mcp/v1/mcp`. A 401
+from `/mcp` carries `WWW-Authenticate: Bearer resource_metadata="<that URL>"`,
+which is how a compliant client finds all of this from the endpoint URL
+alone.
+
+The generic, un-scoped `/.well-known/oauth-authorization-server` and
+`/.well-known/oauth-protected-resource` are answered **only when no known
+competing MCP/OAuth plugin is active** (`emcp_oauth_competing_oauth_plugins`
+lists them; `emcp_oauth_claim_generic_wellknown` overrides the decision), so
+a solo install still satisfies a client that probes the bare path, and a
+shared install never steals a sibling's connection.
+
+Endpoints: `GET/POST /elementor-mcp/authorize`, `POST /elementor-mcp/token`,
+`POST /elementor-mcp/revoke`. PKCE (RFC 7636) is mandatory;
+`code_challenge_method` must be `S256`. Discovery, token and revoke send
+`nocache_headers()` and CORS headers (`Access-Control-Allow-Origin: *`, with
+a 204 answer to `OPTIONS`) — a client's browser-side JS may fetch them
+cross-origin, and a page cache must never hold on to them.
 
 There is no dynamic client registration and no `client_secret` — this is a
 public-client, PKCE-only design, matching what real requests to this server
@@ -124,7 +141,7 @@ issued — every redirect back to the client happens only after that check,
 so this cannot become an open redirect.
 
 ```
-GET /authorize
+GET /elementor-mcp/authorize
   ?response_type=code
   &client_id=<opaque>
   &redirect_uri=<must be on the allow-list>
@@ -142,10 +159,10 @@ transient) and redirects to `redirect_uri?code=...&state=...`. Deny
 redirects with `error=access_denied`.
 
 ```
-POST /token
+POST /elementor-mcp/token
   grant_type=authorization_code
-  &code=<from /authorize>
-  &redirect_uri=<must match the /authorize request exactly>
+  &code=<from /elementor-mcp/authorize>
+  &redirect_uri=<must match the authorize request exactly>
   &code_verifier=<the PKCE verifier the challenge was derived from>
 ```
 
@@ -158,15 +175,29 @@ On success:
 The access token is not a bespoke credential — it's a real WordPress
 application password, minted via
 `WP_Application_Passwords::create_new_application_password()` the instant
-consent is given, named `Claude MCP (OAuth, <timestamp>)`. It's visible and
-individually revocable from **Users → Profile → Application Passwords**
-like any other, and needs no code on the resource-server side beyond the
-bearer-token shim every other route already uses. There is no refresh token
-grant — the underlying application password does not expire, so none is
-needed; a client that requests one gets `unsupported_grant_type` rather
-than a silent failure.
+consent is given, named `Elementor MCP (<client_id>)`. The name is
+deterministic per client, and any existing password with that name is
+deleted first, so a client that reconnects replaces its credential rather
+than leaving a new one behind every time. It's visible and individually
+revocable from **Users → Profile → Application Passwords** like any other,
+and needs no code on the resource-server side beyond the bearer-token shim
+every other route already uses. There is no refresh token grant — the
+underlying application password does not expire, so none is needed; a
+client that requests one gets `unsupported_grant_type` rather than a silent
+failure.
 
-Errors from `/token` follow RFC 6749 §5.2: `{ "error": "...", "error_description": "..." }`
+```
+POST /elementor-mcp/revoke
+  token=<the access token>
+```
+
+RFC 7009 revocation: the matching application password is deleted and the
+token stops working immediately. Always answers `200 { "revoked": true }`,
+including for an unknown or already-revoked token — the caller's goal is
+met either way, and a distinguishable error would only confirm to a third
+party whether a guessed token had ever been valid.
+
+Errors from `/elementor-mcp/token` follow RFC 6749 §5.2: `{ "error": "...", "error_description": "..." }`
 with `invalid_request`, `invalid_grant` (unknown/expired/replayed code,
 `redirect_uri` mismatch, or a `code_verifier` that doesn't match the
 original `code_challenge`), or `unsupported_grant_type`.

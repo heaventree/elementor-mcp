@@ -144,10 +144,14 @@ class EMCP_REST_Site extends EMCP_REST_Base {
 			),
 			'nativeMcp'       => $this->native_mcp_state(),
 			'oauth'           => array(
-				'issuer'               => EMCP_OAuth::issuer(),
-				'authorizationEndpoint' => EMCP_OAuth::issuer() . '/authorize',
-				'tokenEndpoint'         => EMCP_OAuth::issuer() . '/token',
-				'allowedRedirectUris'   => EMCP_OAuth::allowed_redirect_uris(),
+				'issuer'                      => EMCP_OAuth::issuer(),
+				'authorizationEndpoint'       => EMCP_OAuth::authorize_url(),
+				'tokenEndpoint'               => EMCP_OAuth::token_url(),
+				'revocationEndpoint'          => EMCP_OAuth::revoke_url(),
+				'authorizationServerMetadata' => EMCP_OAuth::authorization_server_metadata_url(),
+				'protectedResourceMetadata'   => EMCP_OAuth::protected_resource_metadata_url(),
+				'claimsGenericWellKnown'      => EMCP_OAuth::may_claim_generic_wellknown(),
+				'allowedRedirectUris'         => EMCP_OAuth::allowed_redirect_uris(),
 			),
 		);
 

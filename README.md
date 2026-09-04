@@ -77,7 +77,7 @@ Plugin** in wp-admin:
 
 ```bash
 ./scripts/package-plugin.sh
-# build/elementor-mcp-bridge-1.2.0.zip
+# build/elementor-mcp-bridge-1.3.0.zip
 ```
 
 The script refuses to build if any file fails `php -l`, so a broken plugin
@@ -237,8 +237,10 @@ accepts a static token.
 both web and desktop, does not accept a static token: it runs a full
 authorization-code flow with PKCE (RFC 6749 + RFC 7636) against the
 connector's own origin, the same as any other OAuth-only remote MCP server.
-The plugin implements that flow — `GET/POST /authorize`, `POST /token`, plus
-the RFC 8414 and RFC 9728 discovery documents — entirely to satisfy this
+The plugin implements that flow — `GET/POST /elementor-mcp/authorize`,
+`POST /elementor-mcp/token`, `POST /elementor-mcp/revoke`, plus the RFC 8414
+and RFC 9728 discovery documents, all scoped under the plugin's own slug so
+it can share a site with other MCP plugins — entirely to satisfy this
 requirement; it does not add any capability beyond what the direct route
 already offers, and the local Node server never needs it.
 
@@ -247,9 +249,14 @@ connector in claude.ai with the URL `https://example.com/wp-json/elementor-mcp/v
 and it drives the flow on its own: a redirect to your site to log in (if not
 already) and approve access, then straight back to claude.ai, connected.
 What gets minted behind the scenes is, again, an ordinary application
-password — named `Claude MCP (OAuth, <timestamp>)` — so it shows up
-individually in **Users → Profile → Application Passwords** and can be
-revoked from there like any other, with nothing extra to track.
+password — named `Elementor MCP (<client>)`, one per client, replaced on
+reconnect rather than accumulated — so it shows up individually in
+**Users → Profile → Application Passwords** and can be revoked from there
+like any other, with nothing extra to track.
+
+Upgrading from 1.2.0: `/authorize` and `/token` at the site root are gone.
+Purge any full-page cache, then remove and re-add the connector in claude.ai
+once so it re-runs discovery against the scoped paths.
 
 The redirect target is checked against an allow-list
 (`emcp_oauth_allowed_redirect_uris`, defaulting to claude.ai's confirmed
@@ -364,8 +371,10 @@ php tests/tree-mutators.php  # 236 assertions: PHP tree mutators against the sam
 php tests/mcp-endpoint.php   # 51 assertions: full JSON-RPC round trips against an
                               # in-memory WordPress — initialize, tools/list, and
                               # real element edits through the hash-guarded write path
-php tests/oauth-flow.php     # 46 assertions: the full authorization-code + PKCE
-                              # round trip, driven directly against EMCP_OAuth
+php tests/oauth-flow.php     # 82 assertions: the full authorization-code + PKCE
+                              # round trip, path-scoped routing, per-client token
+                              # replacement and revocation, driven directly
+                              # against EMCP_OAuth
 ./scripts/package-plugin.sh  # build the installable zip
 ```
 
@@ -383,15 +392,20 @@ Four PHP harnesses, in order of what they prove:
   the snapshot-then-restore undo path. It stubs WordPress rather than
   Elementor, so it exercises the bridge's own fallback write path, not
   `Document::save()` — that half still needs a real site.
-- `tests/oauth-flow.php` — discovery metadata; the not-logged-in-redirects-
+- `tests/oauth-flow.php` — discovery metadata at the plugin-scoped paths,
+  sent uncacheable; the routing table (scoped paths always, the generic
+  well-known paths only when no competing MCP plugin is active, the old
+  site-root `/authorize` and `/token` never); the not-logged-in-redirects-
   to-login case; consent approve and deny; PKCE accepted with the correct
   verifier and rejected with the wrong one; a used code rejected on replay;
   a mismatched `redirect_uri` rejected; an untrusted `redirect_uri` refused
-  as a page rather than ever becoming a redirect; and the token this
-  endpoint issues successfully authenticating through the existing
-  bearer-token shim with no changes needed there. It calls `EMCP_OAuth`'s
-  private handlers directly via reflection, since the real request router
-  ends in `exit`.
+  as a page rather than ever becoming a redirect; a reconnecting client
+  replacing rather than stacking its application password; `/revoke`
+  deleting exactly the matching password and answering 200 regardless; and
+  the token this endpoint issues authenticating through the existing
+  bearer-token shim with no changes needed there — and no longer
+  authenticating once revoked. It calls `EMCP_OAuth`'s private handlers
+  directly via reflection, since the real request router ends in `exit`.
 
 `tests/capability-guard.mjs` runs the built server over stdio against
 `tests/mock-bridge.mjs`, a stand-in bridge whose element registry, widget
